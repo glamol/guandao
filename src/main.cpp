@@ -1,8 +1,8 @@
 #include "raylib.h"
 
 int main(void) {
-  int Monitor_num = GetMonitorCount();
-  InitWindow(GetMonitorWidth(Monitor_num), GetMonitorHeight(Monitor_num), "raylib [core] example - basic window");
+  int monitor_num = GetMonitorCount();
+  InitWindow(GetMonitorWidth(monitor_num), GetMonitorHeight(monitor_num), "raylib [core] example - basic window");
   
   
   while (!WindowShouldClose()) {
