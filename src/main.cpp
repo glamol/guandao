@@ -1,8 +1,10 @@
 #include "raylib.h"
 
 int main(void) {
-  InitWindow(800, 450, "raylib [core] example - basic window");
-
+  int Monitor_num = GetMonitorCount();
+  InitWindow(GetMonitorWidth(Monitor_num), GetMonitorHeight(Monitor_num), "raylib [core] example - basic window");
+  
+  
   while (!WindowShouldClose()) {
     BeginDrawing();
     ClearBackground(RAYWHITE);
