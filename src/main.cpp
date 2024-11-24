@@ -1,8 +1,11 @@
 #include "raylib.h"
 
 int main(void) {
-  int screen_width = 800;
-  int screen_height = 600;
+  int monitor_num = GetMonitorCount();
+  int screen_width = GetMonitorWidth(monitor_num);
+  int screen_height = GetMonitorHeight(monitor_num);
+
+  InitWindow(screen_width, screen_height,  "raylib [core] example - basic window");
 
   // texture for background
   InitWindow(screen_width, screen_height, "GUANDAO");

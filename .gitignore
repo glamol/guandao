@@ -35,5 +35,7 @@ build
 compile_commands.json
 .cache
 
+.vscode
+
 # for short time
 resources/* 
