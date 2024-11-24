@@ -34,3 +34,6 @@
 build
 compile_commands.json
 .cache
+
+# for short time
+resources/* 
