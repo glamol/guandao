@@ -1,0 +1,47 @@
+GUANDAO Project: Utilities (utils.h / utils.cpp)
+
+These files provide general utility functions used by the main application, separated to keep the code organized.
+
+<PAGE_BREAK>
+
+`utils.h` (Header File):
+
+-   Includes `raylib.h` and `string`.
+-   Uses include guards (`#ifndef UTILS_H`, `#define`, `#endif`).
+-   **Forward Declaration:** Includes `class Book;`. This tells the compiler that a class named `Book` exists without needing the full definition in this header. This is sufficient because the `LoadBookFromFile` declaration only uses `Book` as a pointer type.
+-   **Function Declarations:** Declares the functions implemented in `utils.cpp` so `main.cpp` (or other files) can call them:
+    -   `DrawWrappedText(...)`: Declares the function for drawing text with manual word wrapping. Lists its parameters (font, text, rectangle, font size, line spacing factor, color).
+    -   `LoadBookFromFile(...)`: Declares the function for loading a book. Specifies it takes a file path string and returns a `Book*` (pointer to a Book object).
+
+<PAGE_BREAK>
+
+`utils.cpp` (Source File):
+
+-   Includes `utils.h`, `book_manager.h` (needs the full definition to create `Book` objects and call `isValid`), `sstream`, `iostream`, `vector`, `cstddef`.
+-   Provides the implementation for the declared functions.
+
+**`LoadBookFromFile(...)` Implementation:**
+-   Prints a message indicating the loading attempt.
+-   Allocates a new `Book` object on the heap using `new Book(filePath)`, calling the `Book` class constructor.
+-   Checks if the allocation succeeded (`newBook != nullptr`) AND if the newly created book object considers itself valid (`newBook->isValid()`).
+-   If both checks pass: Prints a success message and returns the `newBook` pointer.
+-   If either check fails: Prints an error message, `delete newBook` to clean up the allocated (but invalid) object, and returns `nullptr` to signal failure.
+
+<PAGE_BREAK>
+
+**`DrawWrappedText(...)` Implementation:**
+-   **Purpose:** Provides manual text wrapping as an alternative to Raylib's built-in `DrawTextRec` (if needed or preferred).
+-   **Logic Overview:**
+    -   Calculates the vertical `lineHeight`.
+    -   Enters a loop that continues as long as there's text remaining and vertical space in the target rectangle.
+    -   Inside the loop, it processes one line at a time:
+        -   Uses a `stringstream` to extract words from the remaining text.
+        -   Builds the line word by word (`lineToDraw`).
+        -   Handles explicit `\n` characters within words.
+        -   Measures each word using `MeasureTextEx`.
+        -   If a word is longer than the rectangle's width, it attempts basic character clipping.
+        -   If a word fits, adds it to the current line.
+        -   If a word doesn't fit, stops building the current line and prepares the remaining text (starting with the unfitting word) for the next iteration of the outer loop.
+    -   Draws the completed line using `DrawTextEx`.
+    -   Updates the vertical position (`currentY`) and the `remainingText` string.
+    -   Trims leading whitespace for the next line.

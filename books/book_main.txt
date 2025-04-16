@@ -1,0 +1,69 @@
+GUANDAO Project: main.cpp Overview
+
+This file contains the main entry point and core logic for the GUANDAO Book Reader application. It utilizes the Raylib library for graphics, windowing, and input, tinyfiledialogs for file selection, and custom modules for book management and utilities.
+
+<PAGE_BREAK>
+
+Initialization:
+
+The program starts by setting up the screen dimensions (currently fixed at 800x600) and initializing a Raylib window.
+
+Key variables are declared for:
+- Panel state (position `panel_x`, visibility `panel_visible`, animation `is_animating`).
+- Panel toggle button appearance (icon, colors).
+- Panel content button dimensions.
+- Book state (`currentBook` pointer, `currentPageText`, flags like `bookLoadAttemptedOrSuccess`).
+- Text display area (`textDisplayArea` rectangle).
+- Page navigation buttons (`prevPageButtonRect`, `nextPageButtonRect`).
+
+Raylib's target FPS is set to 60.
+
+<PAGE_BREAK>
+
+The Main Loop (`while (!WindowShouldClose())`):
+
+This loop runs every frame until the user requests to close the window (via OS controls, ESC key, or the in-app Exit button).
+
+Inside the loop:
+1.  **Update Phase:**
+    -   Get current mouse position.
+    -   Calculate positions for panel elements (toggle button, open button, exit button) based on the panel's current `panel_x`.
+    -   Handle Input (Mouse and Keyboard).
+    -   Update panel animation state if `is_animating` is true.
+    -   Adjust the `textDisplayArea` rectangle's position and width based on the panel's current state (visible, hidden, or animating) to prevent overlap.
+
+<PAGE_BREAK>
+
+Input Handling:
+
+Mouse Clicks (`IsMouseButtonPressed`):
+-   Checks collision with the Panel Toggle Button to initiate sliding animation.
+-   Checks collision with Panel Content Buttons (Open Book, Exit) *only* if the panel is somewhat visible.
+    -   Exit Button: Cleans up `currentBook`, calls `CloseWindow()`, and returns 0 to terminate `main`.
+    -   Open Book Button: Opens the tinyfiledialogs file selector. If a file is chosen, calls `LoadBookFromFile` (from utils), sets the `bookLoadAttemptedOrSuccess` flag, updates the `currentBook` pointer and related state variables based on success or failure. Optionally hides the panel.
+-   Checks collision with Page Navigation Buttons ('<', '>') *only* if a valid book (`currentBook != nullptr`) is loaded and the panel wasn't clicked in the same frame. Updates the book's current page if possible.
+
+Keyboard Input (`IsKeyPressed`):
+-   Checks for Left/Right arrow keys *only* if a valid book is loaded. Updates the book's current page if possible.
+
+<PAGE_BREAK>
+
+Drawing Phase (`BeginDrawing()` / `EndDrawing()`):
+
+-   Clears the background (`RAYWHITE`).
+-   Conditional Drawing:
+    -   If `bookLoadAttemptedOrSuccess` is false: Draws the centered "GUANDAO" preview text and instructions.
+    -   Else (a load was attempted):
+        -   Calls `DrawWrappedText` (from utils) to render the `currentPageText` (book content or error message) within the adjusted `textDisplayArea`.
+        -   If `currentBook` is valid (not null): Draws the "Page X / Y" info and the '<' / '>' navigation buttons, graying them out if navigation is not possible.
+-   Draws the sliding panel itself.
+-   Draws the panel toggle button.
+-   Draws the panel content buttons (Open, Exit) if the panel is sufficiently visible.
+
+<PAGE_BREAK>
+
+Cleanup:
+
+After the main loop terminates (either via the Exit button or OS close request):
+-   `delete currentBook;` is called to free the memory allocated for the last loaded book object, if any.
+-   `return 0;` indicates successful program termination.

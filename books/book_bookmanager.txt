@@ -1,0 +1,56 @@
+GUANDAO Project: Book Manager (book_manager.h / book_manager.cpp)
+
+These files define and implement the `Book` class, which is responsible for holding the content of a loaded book and managing the current page state.
+
+<PAGE_BREAK>
+
+`book_manager.h` (Header File - The Interface):
+
+-   Includes necessary headers (`string`, `vector`, `cstddef`).
+-   Uses include guards (`#ifndef BOOK_MANAGER_H`, `#define`, `#endif`) to prevent multiple inclusions.
+-   Declares the `Book` class.
+-   **Public Interface:** Defines the functions that other parts of the program can use to interact with a `Book` object:
+    -   `Book(const std::string& filePath)`: Constructor - Takes a file path and attempts to load the book.
+    -   `int getLength() const`: Returns the total number of pages.
+    -   `std::string getCurrentPage() const`: Returns the text content of the current page.
+    -   `int getCurrentPageNumber() const`: Returns the 1-based index of the current page.
+    -   `void nextPage()`: Advances to the next page, if possible.
+    *   `void previousPage()`: Moves to the previous page, if possible.
+    *   `bool isValid() const`: Indicates if the book was loaded successfully and contains pages.
+-   **Private Members:** Declares the internal data storage:
+    -   `std::vector<std::string> pages`: A dynamic array where each element stores the text content of one page.
+    -   `size_t currentPageIndex`: A 0-based index tracking the currently viewed page within the `pages` vector.
+
+<PAGE_BREAK>
+
+`book_manager.cpp` (Source File - The Implementation):
+
+-   Includes `book_manager.h`, `fstream`, `iostream`, `sstream`, etc.
+-   Provides the code for each method declared in the header.
+
+**Constructor (`Book::Book(...)`):**
+-   Initializes `currentPageIndex` to 0.
+-   Attempts to open the file specified by `filePath`. Prints an error and returns if opening fails.
+-   Reads the file line by line using `std::getline`.
+-   Uses a `std::stringstream` (`current_page_content`) to accumulate lines belonging to the current page.
+-   If a line exactly matches "<PAGE_BREAK>", the accumulated content in the stringstream is pushed into the `pages` vector, and the stringstream is cleared.
+-   Otherwise, the line (plus a newline character `\n`) is appended to the stringstream.
+-   After the loop, if the stringstream contains any remaining text (the last page), it's added to the `pages` vector.
+-   Closes the file.
+-   If the `pages` vector ends up empty, prints a warning.
+
+<PAGE_BREAK>
+
+Getter Methods:
+
+-   **`getLength()`:** Simply returns the result of `this->pages.size()`.
+-   **`getCurrentPage()`:** Checks if `pages` is not empty and if `currentPageIndex` is within the valid bounds (`0 <= index < size`). If valid, returns `pages[currentPageIndex]`. Otherwise, returns an appropriate error message string.
+-   **`getCurrentPageNumber()`:** Checks if `pages` is empty (returns 0 if so). Otherwise, returns `currentPageIndex + 1` to provide a 1-based page number.
+-   **`isValid()`:** Returns `true` if `this->pages.empty()` is false (meaning the vector contains at least one page), `false` otherwise.
+
+<PAGE_BREAK>
+
+Navigation Methods:
+
+-   **`nextPage()`:** Checks if `pages` is not empty and if `currentPageIndex` is less than the index of the *last* page (`pages.size() - 1`). If both are true, it increments `currentPageIndex`.
+-   **`previousPage()`:** Checks if `currentPageIndex` is greater than 0. If true, it decrements `currentPageIndex`.

@@ -2,6 +2,7 @@
 CC = clang
 CXX = clang++
 CXXFLAGS = -std=c++17 -O2
+CXXFLAGS += -Wall -Wextra -Wpedantic
 
 # paths
 RAYLIB_PATH = lib/raylib-5.5
@@ -24,7 +25,8 @@ SQLITE_LIB = $(SQLITE_BUILD)/libsqlite3.a
 
 
 # project
-SRC = src/main.cpp
+SRC = src/main.cpp book_src/book_manager.cpp src/utils.cpp
+
 OUT = build/guandao
 
 #temp
@@ -33,6 +35,11 @@ TEST_SRC = tests/manga_db_test.c
 TEST_OUT = build/manga_db_test
 TEST_INCLUDE = -Idb_src/
 TEST_RES = tests/res
+
+#book
+# BOOK_SRC = book_src/
+BOOK_INCLUDE = -Ibook_src/
+
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S), Darwin)  # macOS
@@ -50,7 +57,7 @@ all: $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(OUT)
 # build guandao
 $(OUT): $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB)
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE)
 
 # build manga_db_test
 $(TEST_OUT): $(TEST_SRC) $(SQLITE_LIB)
