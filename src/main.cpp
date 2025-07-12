@@ -107,18 +107,21 @@ void HandleInput(AppContext& ctx) {
                 const char *filters[] = {"*.txt"};
                 const char *file = tinyfd_openFileDialog("Select Book (.txt)", "", 1, filters, "Text Files", 0);
 
-                ctx.bookLoadAttemptedOrSuccess = true;
 
                 if (file) {
+                    ctx.bookLoadAttemptedOrSuccess = true; // set flag only when a file is chosen
+                    delete ctx.currentBook; // clean up old book before assigning new one
+                    ctx.currentBook = nullptr; 
+
                     Book* loadedBook = LoadBookFromFile(file);
                     if (loadedBook != nullptr) {
-                        delete ctx.currentBook; // clean up old book before assigning new one
                         ctx.currentBook = loadedBook;
                         if (ctx.panel_visible && !ctx.is_animating) { // auto-hide panel on successful load
                             ctx.panel_visible = false;
                             ctx.is_animating = true;
                         }
                     } else {
+                        // no need to handle ctx.currentBook here, it's already null
                         ctx.currentPageText = "Error loading book:\n" + std::string(file) + "\n\nPlease ensure the file exists, is readable,\nand contains '<PAGE_BREAK>' markers.";
                         ctx.pageInfoText = "Book Error";
                         ctx.currentPageNum = 0;
