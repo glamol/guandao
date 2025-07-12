@@ -2,9 +2,41 @@
 #include "tinyfiledialogs.h"
 #include "book_manager.h"
 #include "utils.h"
-#include <iostream>
 #include <string>
 #include <vector>
+#include <memory>   // smart pointer support
+#include <sstream>  // WrapTextLines helper
+
+// one‑shot wrapper that pre‑computes word‑wrapped lines for a page
+static std::vector<std::string> WrapTextLines(Font font,
+                                             const std::string& text,
+                                             float fontSize,
+                                             float maxWidth) {
+    std::vector<std::string> lines;
+    std::istringstream ss(text);
+    std::string word, current;
+    while (ss >> word) {
+        bool forcedBreak = false;
+        size_t nlPos = word.find('\n');
+        if (nlPos != std::string::npos) {
+            forcedBreak = true;
+            word = word.substr(0, nlPos);
+        }
+        std::string candidate = (current.empty() ? "" : " ") + word;
+        if (MeasureTextEx(font, (current + candidate).c_str(), fontSize, 1).x <= maxWidth) {
+            current += candidate;
+        } else {
+            if (!current.empty()) lines.push_back(current);
+            current = word; // word starts new line
+        }
+        if (forcedBreak) {
+            lines.push_back(current);
+            current.clear();
+        }
+    }
+    if (!current.empty()) lines.push_back(current);
+    return lines;
+}
 
 // holds all the important variables for the app
 struct AppContext {
@@ -29,12 +61,16 @@ struct AppContext {
     const int panel_button_height = 40;
     const int open_button_y_offset = panel_toggle_button_offset + panel_toggle_button_height + 10;
 
-    Book* currentBook = nullptr;
+    std::unique_ptr<Book> currentBook; // managed automatically
     std::string currentPageText = "";
     std::string pageInfoText = "";
     int currentPageNum = 0;
     int totalPages = 0;
     bool bookLoadAttemptedOrSuccess = false;
+
+    // cached layout so we don't re‑measure every frame
+    std::string cachedPageText;
+    std::vector<std::string> cachedLines;
 
     bool exitRequest = false; // a flag to tell the main loop to exit
 
@@ -61,7 +97,6 @@ void UpdateState(AppContext& ctx);
 // puts everything on the screen
 void DrawUI(const AppContext& ctx);
 
-
 int main(void) {
     AppContext ctx;
 
@@ -74,12 +109,15 @@ int main(void) {
         DrawUI(ctx);
     }
 
-    delete ctx.currentBook;
+    // currentBook automatically cleaned by unique_ptr
     CloseWindow();
     return 0;
 }
 
 void HandleInput(AppContext& ctx) {
+    // block interaction while the panel is moving
+    if (ctx.is_animating) return;
+
     Vector2 mouse_position = GetMousePosition();
     bool panelWasClicked = false;
 
@@ -91,10 +129,10 @@ void HandleInput(AppContext& ctx) {
             (float)ctx.panel_toggle_button_height
         };
         if (ctx.panel_x <= -ctx.panel_width) {
-             panel_toggle_rect.x = ctx.panel_toggle_button_offset;
+            panel_toggle_rect.x = ctx.panel_toggle_button_offset;
         }
 
-        if (CheckCollisionPointRec(mouse_position, panel_toggle_rect) && !ctx.is_animating) {
+        if (CheckCollisionPointRec(mouse_position, panel_toggle_rect)) {
             ctx.panel_visible = !ctx.panel_visible;
             ctx.is_animating = true;
             panelWasClicked = true;
@@ -107,21 +145,20 @@ void HandleInput(AppContext& ctx) {
                 const char *filters[] = {"*.txt"};
                 const char *file = tinyfd_openFileDialog("Select Book (.txt)", "", 1, filters, "Text Files", 0);
 
-
                 if (file) {
-                    ctx.bookLoadAttemptedOrSuccess = true; // set flag only when a file is chosen
-                    delete ctx.currentBook; // clean up old book before assigning new one
-                    ctx.currentBook = nullptr; 
+                    ctx.bookLoadAttemptedOrSuccess = true;
+                    ctx.currentBook.reset(); // release old book
+                    ctx.cachedPageText.clear(); // invalidate cache
+                    ctx.cachedLines.clear();
 
-                    Book* loadedBook = LoadBookFromFile(file);
-                    if (loadedBook != nullptr) {
-                        ctx.currentBook = loadedBook;
-                        if (ctx.panel_visible && !ctx.is_animating) { // auto-hide panel on successful load
+                    auto candidate = std::make_unique<Book>(file); // unique_ptr construction
+                    if (candidate && candidate->isValid()) {
+                        ctx.currentBook = std::move(candidate);
+                        if (ctx.panel_visible) {
                             ctx.panel_visible = false;
                             ctx.is_animating = true;
                         }
                     } else {
-                        // no need to handle ctx.currentBook here, it's already null
                         ctx.currentPageText = "Error loading book:\n" + std::string(file) + "\n\nPlease ensure the file exists, is readable,\nand contains '<PAGE_BREAK>' markers.";
                         ctx.pageInfoText = "Book Error";
                         ctx.currentPageNum = 0;
@@ -137,7 +174,7 @@ void HandleInput(AppContext& ctx) {
             }
         }
 
-        if (ctx.currentBook != nullptr && !panelWasClicked) {
+        if (ctx.currentBook && !panelWasClicked) {
             if (CheckCollisionPointRec(mouse_position, ctx.nextPageButtonRect) && ctx.currentPageNum < ctx.totalPages) {
                 ctx.currentBook->nextPage();
             } else if (CheckCollisionPointRec(mouse_position, ctx.prevPageButtonRect) && ctx.currentPageNum > 1) {
@@ -146,7 +183,7 @@ void HandleInput(AppContext& ctx) {
         }
     }
 
-    if (ctx.currentBook != nullptr) {
+    if (ctx.currentBook) {
         if (IsKeyPressed(KEY_RIGHT) && ctx.currentPageNum < ctx.totalPages) {
             ctx.currentBook->nextPage();
         }
@@ -177,15 +214,19 @@ void UpdateState(AppContext& ctx) {
     ctx.panel_toggle_color = ctx.panel_visible ? RAYWHITE : BLACK;
     ctx.panel_toggle_text_color = ctx.panel_visible ? BLACK : RAYWHITE;
 
-    // update book page state if a book is loaded
-    if (ctx.currentBook != nullptr) {
+    if (ctx.currentBook) {
         ctx.currentPageNum = ctx.currentBook->getCurrentPageNumber();
         ctx.totalPages = ctx.currentBook->getLength();
         ctx.currentPageText = ctx.currentBook->getCurrentPage();
         ctx.pageInfoText = "Page " + std::to_string(ctx.currentPageNum) + " / " + std::to_string(ctx.totalPages);
     }
 
-    // update UI element positions
+    // refresh wrapped cache only if text has changed
+    if (ctx.currentPageText != ctx.cachedPageText) {
+        ctx.cachedPageText = ctx.currentPageText;
+        ctx.cachedLines = WrapTextLines(GetFontDefault(), ctx.cachedPageText, (float)ctx.fontSize, ctx.screen_width - 2 * ctx.textMarginHorizontal);
+    }
+
     float currentPanelOffset = (ctx.panel_x > -ctx.panel_width) ? (ctx.panel_width + ctx.panel_x) : 0;
     ctx.textDisplayArea = {
         ctx.textMarginHorizontal + currentPanelOffset,
@@ -214,16 +255,23 @@ void DrawUI(const AppContext& ctx) {
         int instructionWidth = MeasureText(instructionText, instructionFontSize);
         DrawText(instructionText, (ctx.screen_width - instructionWidth) / 2, ctx.screen_height / 2 + previewFontSize / 2 + 10, instructionFontSize, GRAY);
     } else {
-        DrawWrappedText(GetFontDefault(), ctx.currentPageText, ctx.textDisplayArea, (float)ctx.fontSize, ctx.textLineSpacingFactor, BLACK);
-        
-        if (ctx.currentBook != nullptr) {
+        // draw from cached lines (no per‑frame MeasureTextEx)
+        float y = ctx.textDisplayArea.y;
+        float lineHeight = ctx.fontSize * ctx.textLineSpacingFactor;
+        for (const std::string& ln : ctx.cachedLines) {
+            if (y + ctx.fontSize > ctx.textDisplayArea.y + ctx.textDisplayArea.height) break;
+            DrawTextEx(GetFontDefault(), ln.c_str(), {ctx.textDisplayArea.x, y}, (float)ctx.fontSize, 1.0f, BLACK);
+            y += lineHeight;
+        }
+
+        if (ctx.currentBook) {
             int pageInfoWidth = MeasureText(ctx.pageInfoText.c_str(), ctx.fontSize);
             DrawText(ctx.pageInfoText.c_str(), (ctx.screen_width - pageInfoWidth) / 2, ctx.screen_height - ctx.navButtonMargin - ctx.navButtonHeight / 2, ctx.fontSize, DARKGRAY);
 
             bool canGoPrev = (ctx.currentPageNum > 1);
             DrawRectangleRec(ctx.prevPageButtonRect, canGoPrev ? LIGHTGRAY : DARKGRAY);
             DrawText("<", ctx.prevPageButtonRect.x + ctx.navButtonWidth / 2 - MeasureText("<", 30) / 2, ctx.prevPageButtonRect.y + ctx.navButtonHeight / 2 - 15, 30, canGoPrev ? BLACK : GRAY);
-            
+
             bool canGoNext = (ctx.currentPageNum < ctx.totalPages);
             DrawRectangleRec(ctx.nextPageButtonRect, canGoNext ? LIGHTGRAY : DARKGRAY);
             DrawText(">", ctx.nextPageButtonRect.x + ctx.navButtonWidth / 2 - MeasureText(">", 30) / 2, ctx.nextPageButtonRect.y + ctx.navButtonHeight / 2 - 15, 30, canGoNext ? BLACK : GRAY);
@@ -242,7 +290,7 @@ void DrawUI(const AppContext& ctx) {
         int open_button_x = ctx.panel_x + ctx.panel_content_button_offset;
         DrawRectangle(open_button_x, ctx.open_button_y_offset, ctx.panel_button_width, ctx.panel_button_height, DARKGRAY);
         DrawText("Open Book (.txt)", open_button_x + (ctx.panel_button_width - MeasureText("Open Book (.txt)", 20)) / 2, ctx.open_button_y_offset + 10, 20, WHITE);
-        
+
         int exit_button_x = ctx.panel_x + ctx.panel_content_button_offset;
         int exit_button_y = ctx.screen_height - ctx.panel_button_height - ctx.panel_content_button_offset;
         DrawRectangle(exit_button_x, exit_button_y, ctx.panel_button_width, ctx.panel_button_height, RED);
