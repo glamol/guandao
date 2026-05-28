@@ -166,6 +166,18 @@ static void HandleInput(AppContext *ctx);
 static void UpdateState(AppContext *ctx);
 static void DrawUI(const AppContext *ctx);
 
+static void open_book(AppContext *ctx, const char *path) {
+    ctx->book_load_attempted = 1;
+    if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
+    ctx->cache_valid = 0;
+    if (book_load(&ctx->book, path)) {
+        ctx->book_loaded = 1;
+        if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
+    } else {
+        book_free(&ctx->book);
+    }
+}
+
 int main(void) {
     AppContext ctx = {0};
     ctx.screen_width = 800;
@@ -211,6 +223,12 @@ int main(void) {
 }
 
 static void HandleInput(AppContext *ctx) {
+    if (IsFileDropped()) {
+        FilePathList dropped = LoadDroppedFiles();
+        if (dropped.count > 0) open_book(ctx, dropped.paths[0]);
+        UnloadDroppedFiles(dropped);
+    }
+
     if (ctx->is_animating) return;
 
     Vector2 mouse = GetMousePosition();
@@ -243,21 +261,7 @@ static void HandleInput(AppContext *ctx) {
                 const char *filters[] = {"*.txt"};
                 const char *file = tinyfd_openFileDialog("Select Book (.txt)", "", 1, filters, "Text Files", 0);
 
-                if (file) {
-                    ctx->book_load_attempted = 1;
-                    if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
-                    ctx->cache_valid = 0;
-
-                    if (book_load(&ctx->book, file)) {
-                        ctx->book_loaded = 1;
-                        if (ctx->panel_visible) {
-                            ctx->panel_visible = 0;
-                            ctx->is_animating = 1;
-                        }
-                    } else {
-                        book_free(&ctx->book);
-                    }
-                }
+                if (file) open_book(ctx, file);
             }
 
             Rectangle exit_btn = {
