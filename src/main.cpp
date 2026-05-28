@@ -1,7 +1,6 @@
 #include "raylib.h"
 #include "tinyfiledialogs.h"
 #include "book_manager.h"
-#include "utils.h"
 #include <string>
 #include <vector>
 #include <memory>   // smart pointer support
