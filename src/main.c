@@ -35,6 +35,11 @@ typedef struct {
     size_t saved_index;
     char page_info[64];
 
+    Texture2D *images;
+    size_t image_count;
+    size_t image_cur;
+    int has_manga;
+
     size_t cached_index;
     int cache_valid;
     float cached_width;
@@ -192,8 +197,18 @@ static void save_progress(const char *book, size_t idx) {
     fclose(f);
 }
 
+static void close_manga(AppContext *ctx) {
+    for (size_t i = 0; i < ctx->image_count; i++) UnloadTexture(ctx->images[i]);
+    free(ctx->images);
+    ctx->images = NULL;
+    ctx->image_count = 0;
+    ctx->image_cur = 0;
+    ctx->has_manga = 0;
+}
+
 static void open_book(AppContext *ctx, const char *path) {
     ctx->book_load_attempted = 1;
+    close_manga(ctx);
     if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
     ctx->cache_valid = 0;
     if (book_load(&ctx->book, path)) {
@@ -206,6 +221,67 @@ static void open_book(AppContext *ctx, const char *path) {
     } else {
         book_free(&ctx->book);
     }
+}
+
+static int has_image_ext(const char *name) {
+    const char *dot = strrchr(name, '.');
+    if (!dot) return 0;
+    return (strcmp(dot, ".png") == 0 || strcmp(dot, ".PNG") == 0 ||
+            strcmp(dot, ".jpg") == 0 || strcmp(dot, ".JPG") == 0 ||
+            strcmp(dot, ".jpeg") == 0 || strcmp(dot, ".JPEG") == 0);
+}
+
+static int path_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+static void open_manga(AppContext *ctx, const char *folder) {
+    ctx->book_load_attempted = 1;
+    if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
+    close_manga(ctx);
+
+    FilePathList files = LoadDirectoryFiles(folder);
+    char **selected = NULL;
+    size_t n = 0;
+    for (unsigned i = 0; i < files.count; i++) {
+        if (has_image_ext(files.paths[i])) {
+            char **g = realloc(selected, (n + 1) * sizeof *g);
+            selected = g;
+            size_t L = strlen(files.paths[i]);
+            selected[n] = malloc(L + 1);
+            memcpy(selected[n], files.paths[i], L + 1);
+            n++;
+        }
+    }
+    UnloadDirectoryFiles(files);
+    if (n == 0) { free(selected); return; }
+
+    qsort(selected, n, sizeof *selected, path_cmp);
+    ctx->images = malloc(n * sizeof *ctx->images);
+    for (size_t i = 0; i < n; i++) {
+        ctx->images[i] = LoadTexture(selected[i]);
+        free(selected[i]);
+    }
+    free(selected);
+    ctx->image_count = n;
+    ctx->has_manga = 1;
+
+    snprintf(ctx->book_path, sizeof ctx->book_path, "%s", folder);
+    size_t resume = load_progress(folder);
+    if (resume < n) ctx->image_cur = resume;
+    ctx->saved_index = ctx->image_cur;
+
+    if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
+}
+
+static void app_next(AppContext *ctx) {
+    if (ctx->book_loaded) book_next(&ctx->book);
+    else if (ctx->has_manga && ctx->image_cur + 1 < ctx->image_count) ctx->image_cur++;
+}
+
+static void app_prev(AppContext *ctx) {
+    if (ctx->book_loaded) book_prev(&ctx->book);
+    else if (ctx->has_manga && ctx->image_cur > 0) ctx->image_cur--;
 }
 
 int main(void) {
@@ -246,6 +322,7 @@ int main(void) {
     }
 
     if (ctx.book_loaded) book_free(&ctx.book);
+    close_manga(&ctx);
     free_lines(ctx.wrapped, ctx.wrapped_count);
     if (ctx.font.texture.id != GetFontDefault().texture.id) UnloadFont(ctx.font);
     CloseWindow();
@@ -255,7 +332,11 @@ int main(void) {
 static void HandleInput(AppContext *ctx) {
     if (IsFileDropped()) {
         FilePathList dropped = LoadDroppedFiles();
-        if (dropped.count > 0) open_book(ctx, dropped.paths[0]);
+        if (dropped.count > 0) {
+            const char *p = dropped.paths[0];
+            if (DirectoryExists(p)) open_manga(ctx, p);
+            else open_book(ctx, p);
+        }
         UnloadDroppedFiles(dropped);
     }
 
@@ -294,6 +375,18 @@ static void HandleInput(AppContext *ctx) {
                 if (file) open_book(ctx, file);
             }
 
+            Rectangle manga_btn = {
+                (float)ctx->panel_x + ctx->panel_content_button_offset,
+                (float)ctx->open_button_y_offset + ctx->panel_button_height + 5,
+                (float)ctx->panel_button_width,
+                (float)ctx->panel_button_height,
+            };
+            if (CheckCollisionPointRec(mouse, manga_btn)) {
+                panel_clicked = 1;
+                const char *folder = tinyfd_selectFolderDialog("Select Manga Folder", "");
+                if (folder) open_manga(ctx, folder);
+            }
+
             Rectangle exit_btn = {
                 (float)ctx->panel_x + ctx->panel_content_button_offset,
                 (float)ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset,
@@ -306,15 +399,15 @@ static void HandleInput(AppContext *ctx) {
             }
         }
 
-        if (ctx->book_loaded && !panel_clicked) {
-            if (CheckCollisionPointRec(mouse, ctx->next_page_button_rect)) book_next(&ctx->book);
-            else if (CheckCollisionPointRec(mouse, ctx->prev_page_button_rect)) book_prev(&ctx->book);
+        if ((ctx->book_loaded || ctx->has_manga) && !panel_clicked) {
+            if (CheckCollisionPointRec(mouse, ctx->next_page_button_rect)) app_next(ctx);
+            else if (CheckCollisionPointRec(mouse, ctx->prev_page_button_rect)) app_prev(ctx);
         }
     }
 
-    if (ctx->book_loaded) {
-        if (IsKeyPressed(KEY_RIGHT)) book_next(&ctx->book);
-        if (IsKeyPressed(KEY_LEFT))  book_prev(&ctx->book);
+    if (ctx->book_loaded || ctx->has_manga) {
+        if (IsKeyPressed(KEY_RIGHT)) app_next(ctx);
+        if (IsKeyPressed(KEY_LEFT))  app_prev(ctx);
     }
 }
 
@@ -342,7 +435,13 @@ static void UpdateState(AppContext *ctx) {
     ctx->panel_toggle_color      = ctx->panel_visible ? RAYWHITE : BLACK;
     ctx->panel_toggle_text_color = ctx->panel_visible ? BLACK : RAYWHITE;
 
-    if (ctx->book_loaded) {
+    if (ctx->has_manga) {
+        if (ctx->image_cur != ctx->saved_index) {
+            save_progress(ctx->book_path, ctx->image_cur);
+            ctx->saved_index = ctx->image_cur;
+        }
+        snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", ctx->image_cur + 1, ctx->image_count);
+    } else if (ctx->book_loaded) {
         size_t idx = book_index(&ctx->book);
         if (ctx->book.cur != ctx->saved_index) {
             save_progress(ctx->book_path, ctx->book.cur);
@@ -395,6 +494,33 @@ static void DrawUI(const AppContext *ctx) {
         int hs = 18;
         int hw = MeasureText(hint, hs);
         DrawText(hint, (ctx->screen_width - hw) / 2, ctx->screen_height / 2 + ts / 2 + 10, hs, GRAY);
+    } else if (ctx->has_manga) {
+        Texture2D t = ctx->images[ctx->image_cur];
+        float aw = ctx->text_display_area.width;
+        float ah = ctx->text_display_area.height;
+        float sx = aw / t.width;
+        float sy = ah / t.height;
+        float s = sx < sy ? sx : sy;
+        float dw = t.width * s;
+        float dh = t.height * s;
+        float dx = ctx->text_display_area.x + (aw - dw) / 2;
+        float dy = ctx->text_display_area.y + (ah - dh) / 2;
+        DrawTextureEx(t, (Vector2){dx, dy}, 0, s, WHITE);
+
+        int piw = MeasureText(ctx->page_info, ctx->font_size);
+        DrawText(ctx->page_info, (ctx->screen_width - piw) / 2,
+                 ctx->screen_height - ctx->nav_button_margin - ctx->nav_button_height / 2,
+                 ctx->font_size, DARKGRAY);
+
+        int can_prev = (ctx->image_cur > 0);
+        DrawRectangleRec(ctx->prev_page_button_rect, can_prev ? LIGHTGRAY : DARKGRAY);
+        DrawText("<", ctx->prev_page_button_rect.x + ctx->nav_button_width / 2 - MeasureText("<", 30) / 2,
+                 ctx->prev_page_button_rect.y + ctx->nav_button_height / 2 - 15, 30, can_prev ? BLACK : GRAY);
+
+        int can_next = (ctx->image_cur + 1 < ctx->image_count);
+        DrawRectangleRec(ctx->next_page_button_rect, can_next ? LIGHTGRAY : DARKGRAY);
+        DrawText(">", ctx->next_page_button_rect.x + ctx->nav_button_width / 2 - MeasureText(">", 30) / 2,
+                 ctx->next_page_button_rect.y + ctx->nav_button_height / 2 - 15, 30, can_next ? BLACK : GRAY);
     } else if (ctx->book_loaded) {
         float y = ctx->text_display_area.y;
         float lh = ctx->font_size * ctx->text_line_spacing_factor;
@@ -440,6 +566,10 @@ static void DrawUI(const AppContext *ctx) {
         DrawRectangle(x, ctx->open_button_y_offset, ctx->panel_button_width, ctx->panel_button_height, DARKGRAY);
         DrawText("Open Book (.txt)", x + (ctx->panel_button_width - MeasureText("Open Book (.txt)", 20)) / 2,
                  ctx->open_button_y_offset + 10, 20, WHITE);
+
+        int my = ctx->open_button_y_offset + ctx->panel_button_height + 5;
+        DrawRectangle(x, my, ctx->panel_button_width, ctx->panel_button_height, DARKGRAY);
+        DrawText("Open Manga", x + (ctx->panel_button_width - MeasureText("Open Manga", 20)) / 2, my + 10, 20, WHITE);
 
         int ey = ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset;
         DrawRectangle(x, ey, ctx->panel_button_width, ctx->panel_button_height, RED);
