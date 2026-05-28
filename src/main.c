@@ -31,6 +31,8 @@ typedef struct {
     Book book;
     int book_loaded;
     int book_load_attempted;
+    char book_path[1024];
+    size_t saved_index;
     char page_info[64];
 
     size_t cached_index;
@@ -166,12 +168,40 @@ static void HandleInput(AppContext *ctx);
 static void UpdateState(AppContext *ctx);
 static void DrawUI(const AppContext *ctx);
 
+static void progress_path(const char *book, char *out, size_t cap) {
+    snprintf(out, cap, "%s.progress", book);
+}
+
+static size_t load_progress(const char *book) {
+    char p[1100];
+    progress_path(book, p, sizeof p);
+    FILE *f = fopen(p, "r");
+    if (!f) return 0;
+    size_t idx = 0;
+    if (fscanf(f, "%zu", &idx) != 1) idx = 0;
+    fclose(f);
+    return idx;
+}
+
+static void save_progress(const char *book, size_t idx) {
+    char p[1100];
+    progress_path(book, p, sizeof p);
+    FILE *f = fopen(p, "w");
+    if (!f) return;
+    fprintf(f, "%zu\n", idx);
+    fclose(f);
+}
+
 static void open_book(AppContext *ctx, const char *path) {
     ctx->book_load_attempted = 1;
     if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
     ctx->cache_valid = 0;
     if (book_load(&ctx->book, path)) {
         ctx->book_loaded = 1;
+        size_t resume = load_progress(path);
+        if (resume < ctx->book.count) ctx->book.cur = resume;
+        snprintf(ctx->book_path, sizeof ctx->book_path, "%s", path);
+        ctx->saved_index = ctx->book.cur;
         if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
     } else {
         book_free(&ctx->book);
@@ -314,6 +344,10 @@ static void UpdateState(AppContext *ctx) {
 
     if (ctx->book_loaded) {
         size_t idx = book_index(&ctx->book);
+        if (ctx->book.cur != ctx->saved_index) {
+            save_progress(ctx->book_path, ctx->book.cur);
+            ctx->saved_index = ctx->book.cur;
+        }
         snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", idx, book_count(&ctx->book));
         if (!ctx->cache_valid || ctx->cached_index != idx) {
             free_lines(ctx->wrapped, ctx->wrapped_count);
