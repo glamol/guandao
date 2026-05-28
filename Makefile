@@ -1,8 +1,7 @@
 # compiler and flags
 CC = clang
-CXX = clang++
-CXXFLAGS = -std=c++17 -O2
-CXXFLAGS += -Wall -Wextra -Wpedantic
+CFLAGS = -std=c11 -O2
+CFLAGS += -Wall -Wextra -Wpedantic
 
 # paths
 RAYLIB_PATH = lib/raylib-5.5
@@ -25,7 +24,7 @@ SQLITE_LIB = $(SQLITE_BUILD)/libsqlite3.a
 
 
 # project
-SRC = src/main.cpp book_src/book_manager.cpp src/utils.cpp
+SRC = src/main.c book_src/book_manager.c
 
 OUT = build/guandao
 
@@ -57,7 +56,7 @@ all: $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(OUT)
 # build guandao
 $(OUT): $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB)
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE)
+	$(CC) $(CFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE)
 
 # build manga_db_test
 $(TEST_OUT): $(TEST_SRC) $(SQLITE_LIB)

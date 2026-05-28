@@ -47,7 +47,8 @@ int book_load(Book *b, const char *path) {
         if (complete) line[--n] = '\0';
 
         if (complete && strcmp(line, PAGE_BREAK) == 0) {
-            if (!push_page(b, page ? page : strdup(""))) { fclose(f); book_free(b); return 0; }
+            if (!page) { page = calloc(1, 1); if (!page) { fclose(f); book_free(b); return 0; } }
+            if (!push_page(b, page)) { fclose(f); book_free(b); return 0; }
             page = NULL; len = 0; cap = 0;
             continue;
         }
