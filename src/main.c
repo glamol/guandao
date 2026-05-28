@@ -92,10 +92,11 @@ static int build_codepoints(int **out) {
 }
 
 static Font load_app_font(int size) {
+    // stb_truetype (used by raylib) does not handle .ttc collections — must be plain .ttf/.otf
     static const char *paths[] = {
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
     };
     int *cps; int n = build_codepoints(&cps);
     for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
