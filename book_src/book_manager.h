@@ -1,22 +1,22 @@
 #ifndef BOOK_MANAGER_H
 #define BOOK_MANAGER_H
 
-#include <string>
-#include <vector>
-#include <cstddef>
-class Book {
-public:
-    Book(const std::string& filePath);
-    int getLength() const;
-    std::string getCurrentPage() const;
-    int getCurrentPageNumber() const;
-    void nextPage();
-    void previousPage();
-    bool isValid() const;
+#include <stddef.h>
 
-private:
-    std::vector<std::string> pages;
-    size_t currentPageIndex;
-};
+typedef struct {
+    char **pages;
+    size_t count;
+    size_t cur;
+} Book;
 
-#endif // BOOK_MANAGER_H
+int  book_load(Book *b, const char *path);
+void book_free(Book *b);
+
+const char *book_page(const Book *b);
+size_t      book_count(const Book *b);
+size_t      book_index(const Book *b);
+
+void book_next(Book *b);
+void book_prev(Book *b);
+
+#endif
