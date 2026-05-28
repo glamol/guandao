@@ -35,8 +35,11 @@ typedef struct {
 
     size_t cached_index;
     int cache_valid;
+    float cached_width;
     char **wrapped;
     size_t wrapped_count;
+
+    Font font;
 
     int exit_request;
 
@@ -57,6 +60,49 @@ typedef struct {
 static void free_lines(char **lines, size_t n) {
     for (size_t i = 0; i < n; i++) free(lines[i]);
     free(lines);
+}
+
+static int build_codepoints(int **out) {
+    static const struct { int lo, hi; } ranges[] = {
+        {0x0020, 0x007E},  // ASCII
+        {0x00A0, 0x00FF},  // Latin-1 supplement
+        {0x0400, 0x04FF},  // Cyrillic
+        {0x3040, 0x309F},  // Hiragana
+        {0x30A0, 0x30FF},  // Katakana
+        {0x4E00, 0x9FAF},  // CJK Unified (common kanji)
+        {0x3000, 0x303F},  // CJK symbols and punctuation
+        {0xFF00, 0xFFEF},  // Halfwidth/fullwidth forms
+    };
+    size_t nr = sizeof ranges / sizeof ranges[0];
+    size_t total = 0;
+    for (size_t i = 0; i < nr; i++) total += ranges[i].hi - ranges[i].lo + 1;
+    int *cps = malloc(total * sizeof *cps);
+    size_t k = 0;
+    for (size_t i = 0; i < nr; i++)
+        for (int c = ranges[i].lo; c <= ranges[i].hi; c++) cps[k++] = c;
+    *out = cps;
+    return (int)total;
+}
+
+static Font load_app_font(int size) {
+    static const char *paths[] = {
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    };
+    int *cps; int n = build_codepoints(&cps);
+    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
+        if (FileExists(paths[i])) {
+            Font f = LoadFontEx(paths[i], size, cps, n);
+            free(cps);
+            if (f.texture.id) {
+                SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);
+                return f;
+            }
+        }
+    }
+    free(cps);
+    return GetFontDefault();
 }
 
 static char **wrap_text(Font font, const char *text, float fs, float maxw, size_t *out_n) {
@@ -146,8 +192,10 @@ int main(void) {
     ctx.nav_button_height = 50.0f;
     ctx.nav_button_margin = 20.0f;
 
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(ctx.screen_width, ctx.screen_height, "GUANDAO - Book Reader");
     SetTargetFPS(60);
+    ctx.font = load_app_font(ctx.font_size);
 
     while (!WindowShouldClose() && !ctx.exit_request) {
         HandleInput(&ctx);
@@ -157,6 +205,7 @@ int main(void) {
 
     if (ctx.book_loaded) book_free(&ctx.book);
     free_lines(ctx.wrapped, ctx.wrapped_count);
+    if (ctx.font.texture.id != GetFontDefault().texture.id) UnloadFont(ctx.font);
     CloseWindow();
     return 0;
 }
@@ -236,6 +285,15 @@ static void HandleInput(AppContext *ctx) {
 }
 
 static void UpdateState(AppContext *ctx) {
+    int new_w = GetScreenWidth();
+    int new_h = GetScreenHeight();
+    if (new_w != ctx->screen_width || new_h != ctx->screen_height) {
+        ctx->screen_width = new_w;
+        ctx->screen_height = new_h;
+        ctx->panel_button_width = ctx->panel_width - 2 * ctx->panel_content_button_offset;
+        ctx->cache_valid = 0;
+    }
+
     if (ctx->is_animating) {
         if (ctx->panel_visible) {
             ctx->panel_x += ctx->panel_animation_speed;
@@ -255,7 +313,7 @@ static void UpdateState(AppContext *ctx) {
         snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", idx, book_count(&ctx->book));
         if (!ctx->cache_valid || ctx->cached_index != idx) {
             free_lines(ctx->wrapped, ctx->wrapped_count);
-            ctx->wrapped = wrap_text(GetFontDefault(), book_page(&ctx->book),
+            ctx->wrapped = wrap_text(ctx->font, book_page(&ctx->book),
                                      (float)ctx->font_size,
                                      ctx->screen_width - 2 * ctx->text_margin_horizontal,
                                      &ctx->wrapped_count);
@@ -304,7 +362,7 @@ static void DrawUI(const AppContext *ctx) {
         float lh = ctx->font_size * ctx->text_line_spacing_factor;
         for (size_t i = 0; i < ctx->wrapped_count; i++) {
             if (y + ctx->font_size > ctx->text_display_area.y + ctx->text_display_area.height) break;
-            DrawTextEx(GetFontDefault(), ctx->wrapped[i],
+            DrawTextEx(ctx->font, ctx->wrapped[i],
                        (Vector2){ctx->text_display_area.x, y},
                        (float)ctx->font_size, 1.0f, BLACK);
             y += lh;
