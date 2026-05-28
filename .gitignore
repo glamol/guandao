@@ -38,4 +38,8 @@ compile_commands.json
 .vscode
 
 # for short time
-resources/* 
+resources/*
+
+# downloaded font assets (fetched by `make fonts`)
+assets/fonts/*.ttf
+assets/fonts/*.otf

@@ -50,7 +50,19 @@ else
 endif
 
 
-all: $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(OUT)
+FONT_DIR = assets/fonts
+FONT = $(FONT_DIR)/GoNotoKurrent-Regular.ttf
+FONT_URL = https://github.com/satbyy/go-noto-universal/releases/latest/download/GoNotoKurrent-Regular.ttf
+
+all: $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(FONT) $(OUT)
+
+$(FONT):
+	@mkdir -p $(FONT_DIR)
+	@echo "Downloading GoNotoKurrent-Regular.ttf..."
+	curl -L -o $(FONT) $(FONT_URL)
+
+.PHONY: fonts
+fonts: $(FONT)
 
 
 # build guandao

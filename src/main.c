@@ -92,16 +92,17 @@ static int build_codepoints(int **out) {
 }
 
 static Font load_app_font(int size) {
-    // stb_truetype (used by raylib) does not handle .ttc collections — must be plain .ttf/.otf
-    static const char *paths[] = {
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    };
+    const char *rel = "assets/fonts/GoNotoKurrent-Regular.ttf";
+    const char *app_dir = GetApplicationDirectory();
+    char candidates[3][1024];
+    snprintf(candidates[0], sizeof candidates[0], "%s%s", app_dir, rel);
+    snprintf(candidates[1], sizeof candidates[1], "%s../%s", app_dir, rel);
+    snprintf(candidates[2], sizeof candidates[2], "%s", rel);
+
     int *cps; int n = build_codepoints(&cps);
-    for (size_t i = 0; i < sizeof paths / sizeof paths[0]; i++) {
-        if (FileExists(paths[i])) {
-            Font f = LoadFontEx(paths[i], size, cps, n);
+    for (size_t i = 0; i < sizeof candidates / sizeof candidates[0]; i++) {
+        if (FileExists(candidates[i])) {
+            Font f = LoadFontEx(candidates[i], size, cps, n);
             free(cps);
             if (f.texture.id) {
                 SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);
@@ -110,6 +111,7 @@ static Font load_app_font(int size) {
         }
     }
     free(cps);
+    TraceLog(LOG_WARNING, "font asset missing: %s", rel);
     return GetFontDefault();
 }
 
