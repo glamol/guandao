@@ -152,12 +152,15 @@ test: $(TEST_OUT) $(CBZ_TEST_OUT)
 	@echo "Running cbz_test..."
 	./$(CBZ_TEST_OUT)
 
-# sample PD comics from archive.org (gitignored)
+# sample PD comics (clach04/sample_reading_media, MIT, gitignored)
 SAMPLES_DIR = build/samples
-SAMPLE_URL = https://archive.org/download/AceComics01/Ace%20Comics%2001.cbz
+SAMPLE_BUNDLE_URL = https://github.com/clach04/sample_reading_media/releases/download/v0.2/sample_reading_media.zip
 .PHONY: samples
 samples: $(SAMPLES_DIR)/sample.cbz
 $(SAMPLES_DIR)/sample.cbz:
 	@mkdir -p $(SAMPLES_DIR)
-	@echo "Downloading sample CBZ from archive.org..."
-	curl -L -o $@ "$(SAMPLE_URL)"
+	@echo "Downloading sample bundle..."
+	curl -L -o $(SAMPLES_DIR)/bundle.zip "$(SAMPLE_BUNDLE_URL)"
+	cd $(SAMPLES_DIR) && unzip -o bundle.zip "*.cbz"
+	mv $(SAMPLES_DIR)/bobby_make_believe_sample.cbz $@
+	rm -f $(SAMPLES_DIR)/bundle.zip
