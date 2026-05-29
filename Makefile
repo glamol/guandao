@@ -22,9 +22,15 @@ SQLITE_BUILD = $(SQLITE_PATH)/build
 SQLITE_OBJ = $(SQLITE_BUILD)/sqlite3.o
 SQLITE_LIB = $(SQLITE_BUILD)/libsqlite3.a
 
+MINIZ_PATH = lib/miniz
+MINIZ_SRC = $(MINIZ_PATH)/miniz.c
+MINIZ_INCLUDE = -I$(MINIZ_PATH)
+MINIZ_BUILD = $(MINIZ_PATH)/build
+MINIZ_OBJ = $(MINIZ_BUILD)/miniz.o
+
 
 # project
-SRC = src/main.c book_src/book_manager.c db_src/db.c
+SRC = src/main.c book_src/book_manager.c db_src/db.c book_src/cbz.c
 DB_INCLUDE = -Idb_src/
 
 OUT = build/guandao
@@ -55,7 +61,7 @@ FONT_DIR = assets/fonts
 FONT = $(FONT_DIR)/GoNotoKurrent-Regular.ttf
 FONT_URL = https://github.com/satbyy/go-noto-universal/releases/latest/download/GoNotoKurrent-Regular.ttf
 
-all: $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(FONT) $(OUT)
+all: $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(MINIZ_OBJ) $(FONT) $(OUT)
 
 $(FONT):
 	@mkdir -p $(FONT_DIR)
@@ -67,15 +73,21 @@ fonts: $(FONT)
 
 
 # build guandao
-$(OUT): $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB)
+$(OUT): $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(MINIZ_OBJ)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(SQLITE_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE) $(DB_INCLUDE)
+	$(CC) $(CFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(MINIZ_OBJ) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(SQLITE_INCLUDE) $(MINIZ_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE) $(DB_INCLUDE)
 
 # build db_test
 $(TEST_OUT): $(TEST_SRC) $(SRC_TEST) $(SQLITE_LIB)
 	@mkdir -p build
 	@mkdir -p tests/res
 	$(CC) $(CFLAGS) -o $(TEST_OUT) $(TEST_SRC) $(SRC_TEST) $(TEST_INCLUDE) $(SQLITE_LIB) $(LDFLAGS)
+
+# build cbz_test
+CBZ_TEST_OUT = build/cbz_test
+$(CBZ_TEST_OUT): tests/cbz_test.c book_src/cbz.c $(MINIZ_OBJ)
+	@mkdir -p build tests/res
+	$(CC) $(CFLAGS) -o $(CBZ_TEST_OUT) tests/cbz_test.c book_src/cbz.c $(MINIZ_OBJ) $(BOOK_INCLUDE) $(MINIZ_INCLUDE) $(LDFLAGS)
 
 
 # clang db_src/tests/manga_db_test.c db_src/manga_d
@@ -102,6 +114,12 @@ $(SQLITE_LIB): $(SQLITE_SRC)
 	$(CC) -c $(SQLITE_SRC) -o $(SQLITE_OBJ)
 	ar rcs $(SQLITE_LIB) $(SQLITE_OBJ)
 
+# build miniz
+$(MINIZ_OBJ): $(MINIZ_SRC)
+	@echo "Building miniz..."
+	@mkdir -p $(MINIZ_BUILD)
+	$(CC) -c $(MINIZ_SRC) -o $(MINIZ_OBJ)
+
 
 
 .PHONY: full 
@@ -121,11 +139,25 @@ clean:
 	rm -rf $(TINYFD_BUILD)
 	@echo "Cleaning SQLite..."
 	rm -rf $(SQLITE_BUILD)
+	@echo "Cleaning miniz..."
+	rm -rf $(MINIZ_BUILD)
 	@echo "Cleaning tests..."
 	rm -rf $(TEST_RES)
 
 # test
 .PHONY: test
-test: $(TEST_OUT)
+test: $(TEST_OUT) $(CBZ_TEST_OUT)
 	@echo "Running db_test..."
 	./$(TEST_OUT)
+	@echo "Running cbz_test..."
+	./$(CBZ_TEST_OUT)
+
+# sample PD comics from archive.org (gitignored)
+SAMPLES_DIR = build/samples
+SAMPLE_URL = https://archive.org/download/AceComics01/Ace%20Comics%2001.cbz
+.PHONY: samples
+samples: $(SAMPLES_DIR)/sample.cbz
+$(SAMPLES_DIR)/sample.cbz:
+	@mkdir -p $(SAMPLES_DIR)
+	@echo "Downloading sample CBZ from archive.org..."
+	curl -L -o $@ "$(SAMPLE_URL)"

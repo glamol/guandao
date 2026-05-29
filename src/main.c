@@ -2,10 +2,12 @@
 #include "tinyfiledialogs.h"
 #include "book_manager.h"
 #include "db.h"
+#include "cbz.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 
 typedef struct {
@@ -244,7 +246,7 @@ static int path_cmp(const void *a, const void *b) {
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
-static void open_manga(AppContext *ctx, const char *folder) {
+static void open_image_folder(AppContext *ctx, const char *folder, const char *display_path) {
     ctx->book_load_attempted = 1;
     if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
     close_manga(ctx);
@@ -273,9 +275,9 @@ static void open_manga(AppContext *ctx, const char *folder) {
     ctx->image_count = n;
     ctx->has_manga = 1;
 
-    snprintf(ctx->book_path, sizeof ctx->book_path, "%s", folder);
-    int resume = db_library_get_progress(&ctx->db, folder);
-    db_library_upsert(&ctx->db, folder, "manga", basename_of(folder), &ctx->lib_id);
+    snprintf(ctx->book_path, sizeof ctx->book_path, "%s", display_path);
+    int resume = db_library_get_progress(&ctx->db, display_path);
+    db_library_upsert(&ctx->db, display_path, "manga", basename_of(display_path), &ctx->lib_id);
     index_manga(&ctx->db, ctx->lib_id, selected, n);
     for (size_t i = 0; i < n; i++) free(selected[i]);
     free(selected);
@@ -283,6 +285,27 @@ static void open_manga(AppContext *ctx, const char *folder) {
     ctx->saved_index = ctx->image_cur;
 
     if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
+}
+
+static void open_manga(AppContext *ctx, const char *folder) {
+    open_image_folder(ctx, folder, folder);
+}
+
+static int has_cbz_ext(const char *p) {
+    const char *d = strrchr(p, '.');
+    return d && strcasecmp(d, ".cbz") == 0;
+}
+
+static void open_cbz(AppContext *ctx, const char *cbz_path) {
+    char cache_root[1024];
+    snprintf(cache_root, sizeof cache_root, "%scache", GetApplicationDirectory());
+    char extracted[1024];
+    if (cbz_extract(cbz_path, cache_root, extracted, sizeof extracted) != 0) {
+        TraceLog(LOG_WARNING, "cbz_extract failed: %s", cbz_path);
+        ctx->book_load_attempted = 1;
+        return;
+    }
+    open_image_folder(ctx, extracted, cbz_path);
 }
 
 static void app_next(AppContext *ctx) {
@@ -353,6 +376,7 @@ static void HandleInput(AppContext *ctx) {
         if (dropped.count > 0) {
             const char *p = dropped.paths[0];
             if (DirectoryExists(p)) open_manga(ctx, p);
+            else if (has_cbz_ext(p)) open_cbz(ctx, p);
             else open_book(ctx, p);
         }
         UnloadDroppedFiles(dropped);
