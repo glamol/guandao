@@ -3,6 +3,7 @@
 #include "book_manager.h"
 #include "db.h"
 #include "cbz.h"
+#include "cbt.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -291,21 +292,23 @@ static void open_manga(AppContext *ctx, const char *folder) {
     open_image_folder(ctx, folder, folder);
 }
 
-static int has_cbz_ext(const char *p) {
+static int has_ext_ci(const char *p, const char *ext) {
     const char *d = strrchr(p, '.');
-    return d && strcasecmp(d, ".cbz") == 0;
+    return d && strcasecmp(d, ext) == 0;
 }
 
-static void open_cbz(AppContext *ctx, const char *cbz_path) {
+static void open_archive(AppContext *ctx, const char *path,
+                         int (*extract)(const char *, const char *, char *, size_t),
+                         const char *kind) {
     char cache_root[1024];
     snprintf(cache_root, sizeof cache_root, "%scache", GetApplicationDirectory());
     char extracted[1024];
-    if (cbz_extract(cbz_path, cache_root, extracted, sizeof extracted) != 0) {
-        TraceLog(LOG_WARNING, "cbz_extract failed: %s", cbz_path);
+    if (extract(path, cache_root, extracted, sizeof extracted) != 0) {
+        TraceLog(LOG_WARNING, "%s extract failed: %s", kind, path);
         ctx->book_load_attempted = 1;
         return;
     }
-    open_image_folder(ctx, extracted, cbz_path);
+    open_image_folder(ctx, extracted, path);
 }
 
 static void app_next(AppContext *ctx) {
@@ -376,7 +379,8 @@ static void HandleInput(AppContext *ctx) {
         if (dropped.count > 0) {
             const char *p = dropped.paths[0];
             if (DirectoryExists(p)) open_manga(ctx, p);
-            else if (has_cbz_ext(p)) open_cbz(ctx, p);
+            else if (has_ext_ci(p, ".cbz")) open_archive(ctx, p, cbz_extract, "cbz");
+            else if (has_ext_ci(p, ".cbt")) open_archive(ctx, p, cbt_extract, "cbt");
             else open_book(ctx, p);
         }
         UnloadDroppedFiles(dropped);

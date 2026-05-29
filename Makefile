@@ -30,7 +30,7 @@ MINIZ_OBJ = $(MINIZ_BUILD)/miniz.o
 
 
 # project
-SRC = src/main.c book_src/book_manager.c db_src/db.c book_src/cbz.c
+SRC = src/main.c book_src/book_manager.c db_src/db.c book_src/cbz.c book_src/cbt.c book_src/archive_util.c
 DB_INCLUDE = -Idb_src/
 
 OUT = build/guandao
@@ -85,9 +85,15 @@ $(TEST_OUT): $(TEST_SRC) $(SRC_TEST) $(SQLITE_LIB)
 
 # build cbz_test
 CBZ_TEST_OUT = build/cbz_test
-$(CBZ_TEST_OUT): tests/cbz_test.c book_src/cbz.c $(MINIZ_OBJ)
+$(CBZ_TEST_OUT): tests/cbz_test.c book_src/cbz.c book_src/archive_util.c $(MINIZ_OBJ)
 	@mkdir -p build tests/res
-	$(CC) $(CFLAGS) -o $(CBZ_TEST_OUT) tests/cbz_test.c book_src/cbz.c $(MINIZ_OBJ) $(BOOK_INCLUDE) $(MINIZ_INCLUDE) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $(CBZ_TEST_OUT) tests/cbz_test.c book_src/cbz.c book_src/archive_util.c $(MINIZ_OBJ) $(BOOK_INCLUDE) $(MINIZ_INCLUDE) $(LDFLAGS)
+
+# build cbt_test
+CBT_TEST_OUT = build/cbt_test
+$(CBT_TEST_OUT): tests/cbt_test.c book_src/cbt.c book_src/archive_util.c
+	@mkdir -p build tests/res
+	$(CC) $(CFLAGS) -o $(CBT_TEST_OUT) tests/cbt_test.c book_src/cbt.c book_src/archive_util.c $(BOOK_INCLUDE) $(LDFLAGS)
 
 
 # clang db_src/tests/manga_db_test.c db_src/manga_d
@@ -146,17 +152,19 @@ clean:
 
 # test
 .PHONY: test
-test: $(TEST_OUT) $(CBZ_TEST_OUT)
+test: $(TEST_OUT) $(CBZ_TEST_OUT) $(CBT_TEST_OUT)
 	@echo "Running db_test..."
 	./$(TEST_OUT)
 	@echo "Running cbz_test..."
 	./$(CBZ_TEST_OUT)
+	@echo "Running cbt_test..."
+	./$(CBT_TEST_OUT)
 
 # sample PD comics (clach04/sample_reading_media, MIT, gitignored)
 SAMPLES_DIR = build/samples
 SAMPLE_BUNDLE_URL = https://github.com/clach04/sample_reading_media/releases/download/v0.2/sample_reading_media.zip
 .PHONY: samples
-samples: $(SAMPLES_DIR)/sample.cbz
+samples: $(SAMPLES_DIR)/sample.cbz $(SAMPLES_DIR)/sample.cbt
 $(SAMPLES_DIR)/sample.cbz:
 	@mkdir -p $(SAMPLES_DIR)
 	@echo "Downloading sample bundle..."
@@ -164,3 +172,12 @@ $(SAMPLES_DIR)/sample.cbz:
 	cd $(SAMPLES_DIR) && unzip -o bundle.zip "*.cbz"
 	mv $(SAMPLES_DIR)/bobby_make_believe_sample.cbz $@
 	rm -f $(SAMPLES_DIR)/bundle.zip
+
+# repackage cbz pages as cbt (tar) for CBT testing
+$(SAMPLES_DIR)/sample.cbt: $(SAMPLES_DIR)/sample.cbz
+	@echo "Building sample.cbt from sample.cbz..."
+	rm -rf $(SAMPLES_DIR)/_unpack
+	mkdir -p $(SAMPLES_DIR)/_unpack
+	cd $(SAMPLES_DIR)/_unpack && unzip -o ../sample.cbz
+	cd $(SAMPLES_DIR)/_unpack && tar -cf ../sample.cbt *
+	rm -rf $(SAMPLES_DIR)/_unpack
