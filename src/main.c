@@ -194,6 +194,7 @@ static void HandleInput(AppContext *ctx);
 static void UpdateState(AppContext *ctx);
 static void DrawUI(const AppContext *ctx);
 static void refresh_library(AppContext *ctx);
+static int  has_ext_ci(const char *p, const char *ext);
 
 static const char *basename_of(const char *path) {
     const char *s = strrchr(path, '/');
@@ -228,6 +229,10 @@ static void close_manga(AppContext *ctx) {
 }
 
 static void open_book(AppContext *ctx, const char *path) {
+    if (!has_ext_ci(path, ".txt")) {
+        TraceLog(LOG_WARNING, "open_book: only .txt supported, got %s", path);
+        return;
+    }
     ctx->book_load_attempted = 1;
     close_manga(ctx);
     if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
@@ -483,9 +488,13 @@ static void HandleInput(AppContext *ctx) {
                 ctx->exit_request = 1;
             }
 
-            int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
-            int lib_y1 = (int)exit_btn.y - 10;
-            int row_h = 28;
+        }
+
+        int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
+        int lib_y1 = (int)ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset - 10;
+        int row_h = 28;
+        int right_clicked = IsMouseButtonPressed(MOUSE_RIGHT_BUTTON);
+        if (ctx->panel_x > -ctx->panel_width + 5) {
             for (size_t i = 0; i < ctx->lib_count; i++) {
                 int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
                 if (y + row_h < lib_y0 || y > lib_y1) continue;
@@ -495,11 +504,16 @@ static void HandleInput(AppContext *ctx) {
                     (float)ctx->panel_button_width,
                     (float)(row_h - 4),
                 };
-                if (CheckCollisionPointRec(mouse, r)) {
+                if (!CheckCollisionPointRec(mouse, r)) continue;
+                if (right_clicked) {
+                    db_library_delete(&ctx->db, ctx->lib_entries[i].id);
+                    refresh_library(ctx);
                     panel_clicked = 1;
-                    open_library_entry(ctx, &ctx->lib_entries[i]);
                     break;
                 }
+                panel_clicked = 1;
+                open_library_entry(ctx, &ctx->lib_entries[i]);
+                break;
             }
         }
 

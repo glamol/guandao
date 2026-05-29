@@ -152,6 +152,17 @@ int db_library_get_progress(Db *db, const char *path) {
     return page;
 }
 
+int db_library_delete(Db *db, int64_t id) {
+    sqlite3_stmt *s;
+    if (sqlite3_prepare_v2(db->handle,
+            "DELETE FROM library WHERE id = ?;", -1, &s, NULL) != SQLITE_OK)
+        return SQLITE_ERROR;
+    sqlite3_bind_int64(s, 1, id);
+    int rc = sqlite3_step(s);
+    sqlite3_finalize(s);
+    return rc == SQLITE_DONE ? SQLITE_OK : rc;
+}
+
 int db_library_list(Db *db, sqlite3_stmt **stmt) {
     const char *sql =
         "SELECT id, kind, path, title, last_page, last_opened_at "

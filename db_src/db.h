@@ -18,6 +18,7 @@ int  db_library_upsert(Db *db, const char *path, const char *kind,
 int  db_library_set_progress(Db *db, int64_t id, int page);
 int  db_library_get_progress(Db *db, const char *path); /* -1 if absent */
 int  db_library_list(Db *db, sqlite3_stmt **stmt);
+int  db_library_delete(Db *db, int64_t id);
 
 /* pages */
 int  db_page_upsert(Db *db, int64_t lib_id, int page_no,
