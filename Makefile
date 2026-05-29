@@ -24,15 +24,16 @@ SQLITE_LIB = $(SQLITE_BUILD)/libsqlite3.a
 
 
 # project
-SRC = src/main.c book_src/book_manager.c
+SRC = src/main.c book_src/book_manager.c db_src/db.c
+DB_INCLUDE = -Idb_src/
 
 OUT = build/guandao
 
 #temp
-SRC_TEST = db_src/manga_db.c
-TEST_SRC = tests/manga_db_test.c
-TEST_OUT = build/manga_db_test
-TEST_INCLUDE = -Idb_src/
+SRC_TEST = db_src/db.c
+TEST_SRC = tests/db_test.c
+TEST_OUT = build/db_test
+TEST_INCLUDE = -Idb_src/ $(SQLITE_INCLUDE)
 TEST_RES = tests/res
 
 #book
@@ -68,13 +69,13 @@ fonts: $(FONT)
 # build guandao
 $(OUT): $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE)
+	$(CC) $(CFLAGS) -o $(OUT) $(SRC) $(RAYLIB_LIB) $(TINYFD_OBJ) $(SQLITE_LIB) $(RAYLIB_INCLUDE) $(TINYFD_INCLUDE) $(SQLITE_INCLUDE) $(LDFLAGS) $(BOOK_INCLUDE) $(DB_INCLUDE)
 
-# build manga_db_test
-$(TEST_OUT): $(TEST_SRC) $(SQLITE_LIB)
+# build db_test
+$(TEST_OUT): $(TEST_SRC) $(SRC_TEST) $(SQLITE_LIB)
 	@mkdir -p build
 	@mkdir -p tests/res
-	$(CC) -o $(TEST_OUT) $(TEST_SRC) $(SRC_TEST) $(TEST_INCLUDE) $(SQLITE_LIB) $(SQLITE_INCLUDE) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $(TEST_OUT) $(TEST_SRC) $(SRC_TEST) $(TEST_INCLUDE) $(SQLITE_LIB) $(LDFLAGS)
 
 
 # clang db_src/tests/manga_db_test.c db_src/manga_d
@@ -126,5 +127,5 @@ clean:
 # test
 .PHONY: test
 test: $(TEST_OUT)
-	@echo "Running manga_db_test..."
+	@echo "Running db_test..."
 	./$(TEST_OUT)

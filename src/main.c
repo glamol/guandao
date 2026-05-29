@@ -1,10 +1,12 @@
 #include "raylib.h"
 #include "tinyfiledialogs.h"
 #include "book_manager.h"
+#include "db.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 typedef struct {
     int screen_width;
@@ -33,6 +35,9 @@ typedef struct {
     int book_load_attempted;
     char book_path[1024];
     size_t saved_index;
+    int64_t lib_id;
+
+    Db db;
     char page_info[64];
 
     Texture2D *images;
@@ -176,28 +181,27 @@ static void HandleInput(AppContext *ctx);
 static void UpdateState(AppContext *ctx);
 static void DrawUI(const AppContext *ctx);
 
-static void progress_path(const char *book, char *out, size_t cap) {
-    snprintf(out, cap, "%s.progress", book);
+static const char *basename_of(const char *path) {
+    const char *s = strrchr(path, '/');
+    return s ? s + 1 : path;
 }
 
-static size_t load_progress(const char *book) {
-    char p[1100];
-    progress_path(book, p, sizeof p);
-    FILE *f = fopen(p, "r");
-    if (!f) return 0;
-    size_t idx = 0;
-    if (fscanf(f, "%zu", &idx) != 1) idx = 0;
-    fclose(f);
-    return idx;
+static void index_book(Db *db, int64_t lib_id, const Book *b) {
+    sqlite3_exec(db->handle, "BEGIN;", NULL, NULL, NULL);
+    for (size_t i = 0; i < b->count; i++) {
+        int64_t page_id = 0;
+        if (db_page_upsert(db, lib_id, (int)i, NULL, &page_id) != SQLITE_OK) continue;
+        db_blob_add(db, page_id, 0, NULL, b->pages[i], NULL);
+    }
+    sqlite3_exec(db->handle, "COMMIT;", NULL, NULL, NULL);
 }
 
-static void save_progress(const char *book, size_t idx) {
-    char p[1100];
-    progress_path(book, p, sizeof p);
-    FILE *f = fopen(p, "w");
-    if (!f) return;
-    fprintf(f, "%zu\n", idx);
-    fclose(f);
+static void index_manga(Db *db, int64_t lib_id, char **paths, size_t n) {
+    sqlite3_exec(db->handle, "BEGIN;", NULL, NULL, NULL);
+    for (size_t i = 0; i < n; i++) {
+        db_page_upsert(db, lib_id, (int)i, paths[i], NULL);
+    }
+    sqlite3_exec(db->handle, "COMMIT;", NULL, NULL, NULL);
 }
 
 static void close_manga(AppContext *ctx) {
@@ -216,8 +220,10 @@ static void open_book(AppContext *ctx, const char *path) {
     ctx->cache_valid = 0;
     if (book_load(&ctx->book, path)) {
         ctx->book_loaded = 1;
-        size_t resume = load_progress(path);
-        if (resume < ctx->book.count) ctx->book.cur = resume;
+        int resume = db_library_get_progress(&ctx->db, path);
+        db_library_upsert(&ctx->db, path, "book", basename_of(path), &ctx->lib_id);
+        index_book(&ctx->db, ctx->lib_id, &ctx->book);
+        if (resume > 0 && (size_t)resume < ctx->book.count) ctx->book.cur = (size_t)resume;
         snprintf(ctx->book_path, sizeof ctx->book_path, "%s", path);
         ctx->saved_index = ctx->book.cur;
         if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
@@ -263,15 +269,17 @@ static void open_manga(AppContext *ctx, const char *folder) {
     ctx->images = malloc(n * sizeof *ctx->images);
     for (size_t i = 0; i < n; i++) {
         ctx->images[i] = LoadTexture(selected[i]);
-        free(selected[i]);
     }
-    free(selected);
     ctx->image_count = n;
     ctx->has_manga = 1;
 
     snprintf(ctx->book_path, sizeof ctx->book_path, "%s", folder);
-    size_t resume = load_progress(folder);
-    if (resume < n) ctx->image_cur = resume;
+    int resume = db_library_get_progress(&ctx->db, folder);
+    db_library_upsert(&ctx->db, folder, "manga", basename_of(folder), &ctx->lib_id);
+    index_manga(&ctx->db, ctx->lib_id, selected, n);
+    for (size_t i = 0; i < n; i++) free(selected[i]);
+    free(selected);
+    if (resume > 0 && (size_t)resume < n) ctx->image_cur = (size_t)resume;
     ctx->saved_index = ctx->image_cur;
 
     if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
@@ -318,6 +326,12 @@ int main(void) {
     SetTargetFPS(60);
     ctx.font = load_app_font(ctx.font_size);
 
+    char db_path[1024];
+    snprintf(db_path, sizeof db_path, "%sguandao.db", GetApplicationDirectory());
+    if (db_open(&ctx.db, db_path) != 0) {
+        TraceLog(LOG_WARNING, "db_open failed: %s", db_path);
+    }
+
     while (!WindowShouldClose() && !ctx.exit_request) {
         HandleInput(&ctx);
         UpdateState(&ctx);
@@ -328,6 +342,7 @@ int main(void) {
     close_manga(&ctx);
     free_lines(ctx.wrapped, ctx.wrapped_count);
     if (ctx.font.texture.id != GetFontDefault().texture.id) UnloadFont(ctx.font);
+    db_close(&ctx.db);
     CloseWindow();
     return 0;
 }
@@ -440,14 +455,14 @@ static void UpdateState(AppContext *ctx) {
 
     if (ctx->has_manga) {
         if (ctx->image_cur != ctx->saved_index) {
-            save_progress(ctx->book_path, ctx->image_cur);
+            db_library_set_progress(&ctx->db, ctx->lib_id, (int)ctx->image_cur);
             ctx->saved_index = ctx->image_cur;
         }
         snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", ctx->image_cur + 1, ctx->image_count);
     } else if (ctx->book_loaded) {
         size_t idx = book_index(&ctx->book);
         if (ctx->book.cur != ctx->saved_index) {
-            save_progress(ctx->book_path, ctx->book.cur);
+            db_library_set_progress(&ctx->db, ctx->lib_id, (int)ctx->book.cur);
             ctx->saved_index = ctx->book.cur;
         }
         snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", idx, book_count(&ctx->book));
