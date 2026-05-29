@@ -41,6 +41,16 @@ typedef struct {
     int64_t lib_id;
 
     Db db;
+
+    /* library list */
+    struct LibEntry {
+        int64_t id;
+        char kind[8];
+        char path[1024];
+        char title[256];
+    } lib_entries[64];
+    size_t lib_count;
+    float lib_scroll;
     char page_info[64];
 
     Texture2D *images;
@@ -183,6 +193,7 @@ static char **wrap_text(Font font, const char *text, float fs, float maxw, size_
 static void HandleInput(AppContext *ctx);
 static void UpdateState(AppContext *ctx);
 static void DrawUI(const AppContext *ctx);
+static void refresh_library(AppContext *ctx);
 
 static const char *basename_of(const char *path) {
     const char *s = strrchr(path, '/');
@@ -230,6 +241,7 @@ static void open_book(AppContext *ctx, const char *path) {
         snprintf(ctx->book_path, sizeof ctx->book_path, "%s", path);
         ctx->saved_index = ctx->book.cur;
         if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
+        refresh_library(ctx);
     } else {
         book_free(&ctx->book);
     }
@@ -286,6 +298,7 @@ static void open_image_folder(AppContext *ctx, const char *folder, const char *d
     ctx->saved_index = ctx->image_cur;
 
     if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
+    refresh_library(ctx);
 }
 
 static void open_manga(AppContext *ctx, const char *folder) {
@@ -295,6 +308,24 @@ static void open_manga(AppContext *ctx, const char *folder) {
 static int has_ext_ci(const char *p, const char *ext) {
     const char *d = strrchr(p, '.');
     return d && strcasecmp(d, ext) == 0;
+}
+
+static void refresh_library(AppContext *ctx) {
+    ctx->lib_count = 0;
+    sqlite3_stmt *s;
+    if (db_library_list(&ctx->db, &s) != SQLITE_OK) return;
+    while (sqlite3_step(s) == SQLITE_ROW && ctx->lib_count < 64) {
+        struct LibEntry *e = &ctx->lib_entries[ctx->lib_count++];
+        e->id = sqlite3_column_int64(s, 0);
+        const unsigned char *k = sqlite3_column_text(s, 1);
+        const unsigned char *p = sqlite3_column_text(s, 2);
+        const unsigned char *t = sqlite3_column_text(s, 3);
+        snprintf(e->kind,  sizeof e->kind,  "%s", k ? (const char *)k : "");
+        snprintf(e->path,  sizeof e->path,  "%s", p ? (const char *)p : "");
+        snprintf(e->title, sizeof e->title, "%s",
+                 (t && *t) ? (const char *)t : basename_of(e->path));
+    }
+    sqlite3_finalize(s);
 }
 
 static void open_archive(AppContext *ctx, const char *path,
@@ -309,6 +340,13 @@ static void open_archive(AppContext *ctx, const char *path,
         return;
     }
     open_image_folder(ctx, extracted, path);
+}
+
+static void open_library_entry(AppContext *ctx, const struct LibEntry *e) {
+    if (strcmp(e->kind, "book") == 0) { open_book(ctx, e->path); return; }
+    if (DirectoryExists(e->path)) open_manga(ctx, e->path);
+    else if (has_ext_ci(e->path, ".cbz")) open_archive(ctx, e->path, cbz_extract, "cbz");
+    else if (has_ext_ci(e->path, ".cbt")) open_archive(ctx, e->path, cbt_extract, "cbt");
 }
 
 static void app_next(AppContext *ctx) {
@@ -357,6 +395,7 @@ int main(void) {
     if (db_open(&ctx.db, db_path) != 0) {
         TraceLog(LOG_WARNING, "db_open failed: %s", db_path);
     }
+    refresh_library(&ctx);
 
     while (!WindowShouldClose() && !ctx.exit_request) {
         HandleInput(&ctx);
@@ -443,6 +482,25 @@ static void HandleInput(AppContext *ctx) {
                 panel_clicked = 1;
                 ctx->exit_request = 1;
             }
+
+            int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
+            int lib_y1 = (int)exit_btn.y - 10;
+            int row_h = 28;
+            for (size_t i = 0; i < ctx->lib_count; i++) {
+                int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
+                if (y + row_h < lib_y0 || y > lib_y1) continue;
+                Rectangle r = {
+                    (float)ctx->panel_x + ctx->panel_content_button_offset,
+                    (float)y,
+                    (float)ctx->panel_button_width,
+                    (float)(row_h - 4),
+                };
+                if (CheckCollisionPointRec(mouse, r)) {
+                    panel_clicked = 1;
+                    open_library_entry(ctx, &ctx->lib_entries[i]);
+                    break;
+                }
+            }
         }
 
         if ((ctx->book_loaded || ctx->has_manga) && !panel_clicked) {
@@ -454,6 +512,14 @@ static void HandleInput(AppContext *ctx) {
     if (ctx->book_loaded || ctx->has_manga) {
         if (IsKeyPressed(KEY_RIGHT)) app_next(ctx);
         if (IsKeyPressed(KEY_LEFT))  app_prev(ctx);
+    }
+
+    if (ctx->panel_x > -ctx->panel_width + 5 && ctx->lib_count > 0) {
+        float wheel = GetMouseWheelMove();
+        if (wheel != 0 && mouse.x < ctx->panel_x + ctx->panel_width) {
+            ctx->lib_scroll -= wheel * 28;
+            if (ctx->lib_scroll < 0) ctx->lib_scroll = 0;
+        }
     }
 }
 
@@ -620,6 +686,23 @@ static void DrawUI(const AppContext *ctx) {
         int ey = ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset;
         DrawRectangle(x, ey, ctx->panel_button_width, ctx->panel_button_height, RED);
         DrawText("EXIT", x + (ctx->panel_button_width - MeasureText("EXIT", 20)) / 2, ey + 10, 20, WHITE);
+
+        int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
+        int lib_y1 = ey - 10;
+        DrawText("Library", x, lib_y0 - 18, 14, LIGHTGRAY);
+        BeginScissorMode(x, lib_y0, ctx->panel_button_width, lib_y1 - lib_y0);
+        int row_h = 28;
+        for (size_t i = 0; i < ctx->lib_count; i++) {
+            int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
+            if (y + row_h < lib_y0 || y > lib_y1) continue;
+            Color bg = (strcmp(ctx->lib_entries[i].kind, "book") == 0)
+                ? (Color){40, 40, 60, 255}
+                : (Color){40, 60, 40, 255};
+            DrawRectangle(x, y, ctx->panel_button_width, row_h - 4, bg);
+            DrawTextEx(ctx->font, ctx->lib_entries[i].title,
+                       (Vector2){x + 6, y + 4}, 14, 1, WHITE);
+        }
+        EndScissorMode();
     }
 
     EndDrawing();
