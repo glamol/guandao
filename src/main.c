@@ -53,10 +53,20 @@ typedef struct {
     float lib_scroll;
     char page_info[64];
 
-    Texture2D *images;
+    char **image_paths;
     size_t image_count;
     size_t image_cur;
     int has_manga;
+    struct MangaSlot {
+        Texture2D tex;
+        size_t idx;
+        int valid;
+    } manga_cache[3];
+
+    size_t sub_page;
+    size_t sub_count;
+    size_t lines_per_page;
+    int goto_last_sub;
 
     size_t cached_index;
     int cache_valid;
@@ -220,12 +230,51 @@ static void index_manga(Db *db, int64_t lib_id, char **paths, size_t n) {
 }
 
 static void close_manga(AppContext *ctx) {
-    for (size_t i = 0; i < ctx->image_count; i++) UnloadTexture(ctx->images[i]);
-    free(ctx->images);
-    ctx->images = NULL;
+    for (size_t i = 0; i < 3; i++) {
+        if (ctx->manga_cache[i].valid) UnloadTexture(ctx->manga_cache[i].tex);
+        ctx->manga_cache[i].valid = 0;
+    }
+    for (size_t i = 0; i < ctx->image_count; i++) free(ctx->image_paths[i]);
+    free(ctx->image_paths);
+    ctx->image_paths = NULL;
     ctx->image_count = 0;
     ctx->image_cur = 0;
     ctx->has_manga = 0;
+}
+
+/* keep only cur-1..cur+1 loaded as textures */
+static void manga_sync(AppContext *ctx) {
+    size_t lo = ctx->image_cur > 0 ? ctx->image_cur - 1 : 0;
+    size_t hi = ctx->image_cur + 1 < ctx->image_count ? ctx->image_cur + 1 : ctx->image_count - 1;
+    for (size_t i = 0; i < 3; i++) {
+        struct MangaSlot *s = &ctx->manga_cache[i];
+        if (s->valid && (s->idx < lo || s->idx > hi)) {
+            UnloadTexture(s->tex);
+            s->valid = 0;
+        }
+    }
+    for (size_t p = lo; p <= hi; p++) {
+        int found = 0;
+        for (size_t i = 0; i < 3; i++)
+            if (ctx->manga_cache[i].valid && ctx->manga_cache[i].idx == p) { found = 1; break; }
+        if (found) continue;
+        for (size_t i = 0; i < 3; i++) {
+            struct MangaSlot *s = &ctx->manga_cache[i];
+            if (!s->valid) {
+                s->tex = LoadTexture(ctx->image_paths[p]);
+                s->idx = p;
+                s->valid = 1;
+                break;
+            }
+        }
+    }
+}
+
+static const Texture2D *manga_current(const AppContext *ctx) {
+    for (size_t i = 0; i < 3; i++)
+        if (ctx->manga_cache[i].valid && ctx->manga_cache[i].idx == ctx->image_cur)
+            return &ctx->manga_cache[i].tex;
+    return NULL;
 }
 
 static void open_book(AppContext *ctx, const char *path) {
@@ -237,14 +286,21 @@ static void open_book(AppContext *ctx, const char *path) {
     close_manga(ctx);
     if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
     ctx->cache_valid = 0;
+    ctx->sub_page = 0;
+    ctx->sub_count = 1;
+    ctx->goto_last_sub = 0;
     if (book_load(&ctx->book, path)) {
         ctx->book_loaded = 1;
         int resume = db_library_get_progress(&ctx->db, path);
         db_library_upsert(&ctx->db, path, "book", basename_of(path), &ctx->lib_id);
         index_book(&ctx->db, ctx->lib_id, &ctx->book);
-        if (resume > 0 && (size_t)resume < ctx->book.count) ctx->book.cur = (size_t)resume;
+        /* single-chunk books persist the sub page, multi-chunk the chunk */
+        if (resume > 0) {
+            if (ctx->book.count == 1) ctx->sub_page = (size_t)resume;
+            else if ((size_t)resume < ctx->book.count) ctx->book.cur = (size_t)resume;
+        }
         snprintf(ctx->book_path, sizeof ctx->book_path, "%s", path);
-        ctx->saved_index = ctx->book.cur;
+        ctx->saved_index = (ctx->book.count == 1) ? ctx->sub_page : ctx->book.cur;
         if (ctx->panel_visible) { ctx->panel_visible = 0; ctx->is_animating = 1; }
         refresh_library(ctx);
     } else {
@@ -286,10 +342,7 @@ static void open_image_folder(AppContext *ctx, const char *folder, const char *d
     if (n == 0) { free(selected); return; }
 
     qsort(selected, n, sizeof *selected, path_cmp);
-    ctx->images = malloc(n * sizeof *ctx->images);
-    for (size_t i = 0; i < n; i++) {
-        ctx->images[i] = LoadTexture(selected[i]);
-    }
+    ctx->image_paths = selected;
     ctx->image_count = n;
     ctx->has_manga = 1;
 
@@ -297,8 +350,6 @@ static void open_image_folder(AppContext *ctx, const char *folder, const char *d
     int resume = db_library_get_progress(&ctx->db, display_path);
     db_library_upsert(&ctx->db, display_path, "manga", basename_of(display_path), &ctx->lib_id);
     index_manga(&ctx->db, ctx->lib_id, selected, n);
-    for (size_t i = 0; i < n; i++) free(selected[i]);
-    free(selected);
     if (resume > 0 && (size_t)resume < n) ctx->image_cur = (size_t)resume;
     ctx->saved_index = ctx->image_cur;
 
@@ -355,13 +406,17 @@ static void open_library_entry(AppContext *ctx, const struct LibEntry *e) {
 }
 
 static void app_next(AppContext *ctx) {
-    if (ctx->book_loaded) book_next(&ctx->book);
-    else if (ctx->has_manga && ctx->image_cur + 1 < ctx->image_count) ctx->image_cur++;
+    if (ctx->book_loaded) {
+        if (ctx->sub_page + 1 < ctx->sub_count) ctx->sub_page++;
+        else if (ctx->book.cur + 1 < ctx->book.count) { book_next(&ctx->book); ctx->sub_page = 0; }
+    } else if (ctx->has_manga && ctx->image_cur + 1 < ctx->image_count) ctx->image_cur++;
 }
 
 static void app_prev(AppContext *ctx) {
-    if (ctx->book_loaded) book_prev(&ctx->book);
-    else if (ctx->has_manga && ctx->image_cur > 0) ctx->image_cur--;
+    if (ctx->book_loaded) {
+        if (ctx->sub_page > 0) ctx->sub_page--;
+        else if (ctx->book.cur > 0) { book_prev(&ctx->book); ctx->goto_last_sub = 1; }
+    } else if (ctx->has_manga && ctx->image_cur > 0) ctx->image_cur--;
 }
 
 int main(void) {
@@ -561,7 +616,22 @@ static void UpdateState(AppContext *ctx) {
     ctx->panel_toggle_color      = ctx->panel_visible ? RAYWHITE : BLACK;
     ctx->panel_toggle_text_color = ctx->panel_visible ? BLACK : RAYWHITE;
 
+    float panel_offset = (ctx->panel_x > -ctx->panel_width) ? (ctx->panel_width + ctx->panel_x) : 0;
+    ctx->text_display_area = (Rectangle){
+        ctx->text_margin_horizontal + panel_offset,
+        ctx->text_margin_top,
+        ctx->screen_width - (ctx->text_margin_horizontal + panel_offset) - ctx->text_margin_horizontal,
+        ctx->screen_height - ctx->text_margin_top - ctx->text_margin_bottom,
+    };
+    if (ctx->text_display_area.width < 10) ctx->text_display_area.width = 10;
+
+    float lh = ctx->font_size * ctx->text_line_spacing_factor;
+    ctx->lines_per_page = 1;
+    if (ctx->text_display_area.height > ctx->font_size)
+        ctx->lines_per_page = (size_t)((ctx->text_display_area.height - ctx->font_size) / lh) + 1;
+
     if (ctx->has_manga) {
+        manga_sync(ctx);
         if (ctx->image_cur != ctx->saved_index) {
             db_library_set_progress(&ctx->db, ctx->lib_id, (int)ctx->image_cur);
             ctx->saved_index = ctx->image_cur;
@@ -569,11 +639,6 @@ static void UpdateState(AppContext *ctx) {
         snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", ctx->image_cur + 1, ctx->image_count);
     } else if (ctx->book_loaded) {
         size_t idx = book_index(&ctx->book);
-        if (ctx->book.cur != ctx->saved_index) {
-            db_library_set_progress(&ctx->db, ctx->lib_id, (int)ctx->book.cur);
-            ctx->saved_index = ctx->book.cur;
-        }
-        snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", idx, book_count(&ctx->book));
         if (!ctx->cache_valid || ctx->cached_index != idx) {
             free_lines(ctx->wrapped, ctx->wrapped_count);
             ctx->wrapped = wrap_text(ctx->font, book_page(&ctx->book),
@@ -583,16 +648,29 @@ static void UpdateState(AppContext *ctx) {
             ctx->cached_index = idx;
             ctx->cache_valid = 1;
         }
-    }
 
-    float panel_offset = (ctx->panel_x > -ctx->panel_width) ? (ctx->panel_width + ctx->panel_x) : 0;
-    ctx->text_display_area = (Rectangle){
-        ctx->text_margin_horizontal + panel_offset,
-        ctx->text_margin_top,
-        ctx->screen_width - (ctx->text_margin_horizontal + panel_offset) - ctx->text_margin_horizontal,
-        ctx->screen_height - ctx->text_margin_top - ctx->text_margin_bottom,
-    };
-    if (ctx->text_display_area.width < 10) ctx->text_display_area.width = 10;
+        ctx->sub_count = ctx->wrapped_count
+            ? (ctx->wrapped_count + ctx->lines_per_page - 1) / ctx->lines_per_page
+            : 1;
+        if (ctx->goto_last_sub) { ctx->sub_page = ctx->sub_count - 1; ctx->goto_last_sub = 0; }
+        if (ctx->sub_page >= ctx->sub_count) ctx->sub_page = ctx->sub_count - 1;
+
+        size_t pos = (ctx->book.count == 1) ? ctx->sub_page : ctx->book.cur;
+        if (pos != ctx->saved_index) {
+            db_library_set_progress(&ctx->db, ctx->lib_id, (int)pos);
+            ctx->saved_index = pos;
+        }
+
+        if (ctx->book.count == 1)
+            snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu",
+                     ctx->sub_page + 1, ctx->sub_count);
+        else if (ctx->sub_count > 1)
+            snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu.%zu / %zu",
+                     idx, ctx->sub_page + 1, book_count(&ctx->book));
+        else
+            snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu",
+                     idx, book_count(&ctx->book));
+    }
 
     ctx->prev_page_button_rect = (Rectangle){
         ctx->nav_button_margin,
@@ -621,17 +699,19 @@ static void DrawUI(const AppContext *ctx) {
         int hw = MeasureText(hint, hs);
         DrawText(hint, (ctx->screen_width - hw) / 2, ctx->screen_height / 2 + ts / 2 + 10, hs, GRAY);
     } else if (ctx->has_manga) {
-        Texture2D t = ctx->images[ctx->image_cur];
-        float aw = ctx->text_display_area.width;
-        float ah = ctx->text_display_area.height;
-        float sx = aw / t.width;
-        float sy = ah / t.height;
-        float s = sx < sy ? sx : sy;
-        float dw = t.width * s;
-        float dh = t.height * s;
-        float dx = ctx->text_display_area.x + (aw - dw) / 2;
-        float dy = ctx->text_display_area.y + (ah - dh) / 2;
-        DrawTextureEx(t, (Vector2){dx, dy}, 0, s, WHITE);
+        const Texture2D *t = manga_current(ctx);
+        if (t) {
+            float aw = ctx->text_display_area.width;
+            float ah = ctx->text_display_area.height;
+            float sx = aw / t->width;
+            float sy = ah / t->height;
+            float s = sx < sy ? sx : sy;
+            float dw = t->width * s;
+            float dh = t->height * s;
+            float dx = ctx->text_display_area.x + (aw - dw) / 2;
+            float dy = ctx->text_display_area.y + (ah - dh) / 2;
+            DrawTextureEx(*t, (Vector2){dx, dy}, 0, s, WHITE);
+        }
 
         int piw = MeasureText(ctx->page_info, ctx->font_size);
         DrawText(ctx->page_info, (ctx->screen_width - piw) / 2,
@@ -650,7 +730,10 @@ static void DrawUI(const AppContext *ctx) {
     } else if (ctx->book_loaded) {
         float y = ctx->text_display_area.y;
         float lh = ctx->font_size * ctx->text_line_spacing_factor;
-        for (size_t i = 0; i < ctx->wrapped_count; i++) {
+        size_t first = ctx->sub_page * ctx->lines_per_page;
+        size_t last = first + ctx->lines_per_page;
+        if (last > ctx->wrapped_count) last = ctx->wrapped_count;
+        for (size_t i = first; i < last; i++) {
             if (y + ctx->font_size > ctx->text_display_area.y + ctx->text_display_area.height) break;
             DrawTextEx(ctx->font, ctx->wrapped[i],
                        (Vector2){ctx->text_display_area.x, y},
@@ -663,12 +746,12 @@ static void DrawUI(const AppContext *ctx) {
                  ctx->screen_height - ctx->nav_button_margin - ctx->nav_button_height / 2,
                  ctx->font_size, DARKGRAY);
 
-        int can_prev = (book_index(&ctx->book) > 1);
+        int can_prev = (ctx->sub_page > 0 || book_index(&ctx->book) > 1);
         DrawRectangleRec(ctx->prev_page_button_rect, can_prev ? LIGHTGRAY : DARKGRAY);
         DrawText("<", ctx->prev_page_button_rect.x + ctx->nav_button_width / 2 - MeasureText("<", 30) / 2,
                  ctx->prev_page_button_rect.y + ctx->nav_button_height / 2 - 15, 30, can_prev ? BLACK : GRAY);
 
-        int can_next = (book_index(&ctx->book) < book_count(&ctx->book));
+        int can_next = (ctx->sub_page + 1 < ctx->sub_count || book_index(&ctx->book) < book_count(&ctx->book));
         DrawRectangleRec(ctx->next_page_button_rect, can_next ? LIGHTGRAY : DARKGRAY);
         DrawText(">", ctx->next_page_button_rect.x + ctx->nav_button_width / 2 - MeasureText(">", 30) / 2,
                  ctx->next_page_button_rect.y + ctx->nav_button_height / 2 - 15, 30, can_next ? BLACK : GRAY);
