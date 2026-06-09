@@ -4,12 +4,15 @@
 #include "db.h"
 #include "cbz.h"
 #include "cbt.h"
+#include "archive_util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <stdint.h>
+#include <dirent.h>
+#include <unistd.h>
 
 typedef struct {
     int screen_width;
@@ -48,8 +51,9 @@ typedef struct {
         char kind[8];
         char path[1024];
         char title[256];
-    } lib_entries[64];
+    } *lib_entries;
     size_t lib_count;
+    size_t lib_cap;
     float lib_scroll;
     char page_info[64];
 
@@ -370,7 +374,14 @@ static void refresh_library(AppContext *ctx) {
     ctx->lib_count = 0;
     sqlite3_stmt *s;
     if (db_library_list(&ctx->db, &s) != SQLITE_OK) return;
-    while (sqlite3_step(s) == SQLITE_ROW && ctx->lib_count < 64) {
+    while (sqlite3_step(s) == SQLITE_ROW) {
+        if (ctx->lib_count == ctx->lib_cap) {
+            size_t nc = ctx->lib_cap ? ctx->lib_cap * 2 : 16;
+            struct LibEntry *g = realloc(ctx->lib_entries, nc * sizeof *g);
+            if (!g) break;
+            ctx->lib_entries = g;
+            ctx->lib_cap = nc;
+        }
         struct LibEntry *e = &ctx->lib_entries[ctx->lib_count++];
         e->id = sqlite3_column_int64(s, 0);
         const unsigned char *k = sqlite3_column_text(s, 1);
@@ -382,6 +393,51 @@ static void refresh_library(AppContext *ctx) {
                  (t && *t) ? (const char *)t : basename_of(e->path));
     }
     sqlite3_finalize(s);
+}
+
+/* extracted dirs are flat: files + .done, no subdirs */
+static void remove_flat_dir(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    char p[1024];
+    while ((e = readdir(d))) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        unlink(p);
+    }
+    closedir(d);
+    rmdir(dir);
+}
+
+/* drop cache dirs whose archive is no longer in the library */
+static void prune_cache_kind(const AppContext *ctx, const char *sub, const char *ext) {
+    char root[1024];
+    snprintf(root, sizeof root, "%scache/%s", GetApplicationDirectory(), sub);
+    DIR *d = opendir(root);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        int referenced = 0;
+        for (size_t i = 0; i < ctx->lib_count; i++) {
+            if (!has_ext_ci(ctx->lib_entries[i].path, ext)) continue;
+            char h[17];
+            au_hash_hex(ctx->lib_entries[i].path, h);
+            if (strcmp(h, e->d_name) == 0) { referenced = 1; break; }
+        }
+        if (!referenced) {
+            char p[1024];
+            snprintf(p, sizeof p, "%s/%s", root, e->d_name);
+            remove_flat_dir(p);
+        }
+    }
+    closedir(d);
+}
+
+static void prune_cache(const AppContext *ctx) {
+    prune_cache_kind(ctx, "cbz", ".cbz");
+    prune_cache_kind(ctx, "cbt", ".cbt");
 }
 
 static void open_archive(AppContext *ctx, const char *path,
@@ -456,6 +512,14 @@ int main(void) {
         TraceLog(LOG_WARNING, "db_open failed: %s", db_path);
     }
     refresh_library(&ctx);
+    prune_cache(&ctx);
+
+    /* resume most recently opened entry */
+    if (ctx.lib_count > 0) {
+        const struct LibEntry *e = &ctx.lib_entries[0];
+        if (DirectoryExists(e->path) || FileExists(e->path))
+            open_library_entry(&ctx, e);
+    }
 
     while (!WindowShouldClose() && !ctx.exit_request) {
         HandleInput(&ctx);
@@ -465,6 +529,7 @@ int main(void) {
 
     if (ctx.book_loaded) book_free(&ctx.book);
     close_manga(&ctx);
+    free(ctx.lib_entries);
     free_lines(ctx.wrapped, ctx.wrapped_count);
     if (ctx.font.texture.id != GetFontDefault().texture.id) UnloadFont(ctx.font);
     db_close(&ctx.db);
@@ -489,8 +554,10 @@ static void HandleInput(AppContext *ctx) {
 
     Vector2 mouse = GetMousePosition();
     int panel_clicked = 0;
+    int left_clicked = IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+    int right_clicked = IsMouseButtonPressed(MOUSE_RIGHT_BUTTON);
 
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+    if (left_clicked) {
         Rectangle toggle = {
             (float)ctx->panel_x + ctx->panel_width - ctx->panel_toggle_button_width - ctx->panel_toggle_button_offset,
             (float)ctx->panel_toggle_button_offset,
@@ -545,37 +612,37 @@ static void HandleInput(AppContext *ctx) {
 
         }
 
+    }
+
+    if ((left_clicked || right_clicked) && ctx->panel_x > -ctx->panel_width + 5) {
         int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
         int lib_y1 = (int)ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset - 10;
         int row_h = 28;
-        int right_clicked = IsMouseButtonPressed(MOUSE_RIGHT_BUTTON);
-        if (ctx->panel_x > -ctx->panel_width + 5) {
-            for (size_t i = 0; i < ctx->lib_count; i++) {
-                int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
-                if (y + row_h < lib_y0 || y > lib_y1) continue;
-                Rectangle r = {
-                    (float)ctx->panel_x + ctx->panel_content_button_offset,
-                    (float)y,
-                    (float)ctx->panel_button_width,
-                    (float)(row_h - 4),
-                };
-                if (!CheckCollisionPointRec(mouse, r)) continue;
-                if (right_clicked) {
-                    db_library_delete(&ctx->db, ctx->lib_entries[i].id);
-                    refresh_library(ctx);
-                    panel_clicked = 1;
-                    break;
-                }
-                panel_clicked = 1;
+        for (size_t i = 0; i < ctx->lib_count; i++) {
+            int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
+            if (y + row_h < lib_y0 || y > lib_y1) continue;
+            Rectangle r = {
+                (float)ctx->panel_x + ctx->panel_content_button_offset,
+                (float)y,
+                (float)ctx->panel_button_width,
+                (float)(row_h - 4),
+            };
+            if (!CheckCollisionPointRec(mouse, r)) continue;
+            if (right_clicked) {
+                db_library_delete(&ctx->db, ctx->lib_entries[i].id);
+                refresh_library(ctx);
+                prune_cache(ctx);
+            } else {
                 open_library_entry(ctx, &ctx->lib_entries[i]);
-                break;
             }
+            panel_clicked = 1;
+            break;
         }
+    }
 
-        if ((ctx->book_loaded || ctx->has_manga) && !panel_clicked) {
-            if (CheckCollisionPointRec(mouse, ctx->next_page_button_rect)) app_next(ctx);
-            else if (CheckCollisionPointRec(mouse, ctx->prev_page_button_rect)) app_prev(ctx);
-        }
+    if (left_clicked && (ctx->book_loaded || ctx->has_manga) && !panel_clicked) {
+        if (CheckCollisionPointRec(mouse, ctx->next_page_button_rect)) app_next(ctx);
+        else if (CheckCollisionPointRec(mouse, ctx->prev_page_button_rect)) app_prev(ctx);
     }
 
     if (ctx->book_loaded || ctx->has_manga) {
