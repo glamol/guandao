@@ -215,6 +215,13 @@ static const char *basename_of(const char *path) {
     return s ? s + 1 : path;
 }
 
+#define LIB_ROW_H 28
+
+static void lib_view_bounds(const AppContext *ctx, int *y0, int *y1) {
+    *y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
+    *y1 = ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset - 10;
+}
+
 static void index_book(Db *db, int64_t lib_id, const Book *b) {
     sqlite3_exec(db->handle, "BEGIN;", NULL, NULL, NULL);
     for (size_t i = 0; i < b->count; i++) {
@@ -312,12 +319,12 @@ static void open_book(AppContext *ctx, const char *path) {
     }
 }
 
+/* raylib can't load webp, so narrower than au_has_img_ext */
 static int has_image_ext(const char *name) {
     const char *dot = strrchr(name, '.');
     if (!dot) return 0;
-    return (strcmp(dot, ".png") == 0 || strcmp(dot, ".PNG") == 0 ||
-            strcmp(dot, ".jpg") == 0 || strcmp(dot, ".JPG") == 0 ||
-            strcmp(dot, ".jpeg") == 0 || strcmp(dot, ".JPEG") == 0);
+    return strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+           strcasecmp(dot, ".jpeg") == 0;
 }
 
 static int path_cmp(const void *a, const void *b) {
@@ -615,20 +622,25 @@ static void HandleInput(AppContext *ctx) {
     }
 
     if ((left_clicked || right_clicked) && ctx->panel_x > -ctx->panel_width + 5) {
-        int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
-        int lib_y1 = (int)ctx->screen_height - ctx->panel_button_height - ctx->panel_content_button_offset - 10;
-        int row_h = 28;
+        int lib_y0, lib_y1;
+        lib_view_bounds(ctx, &lib_y0, &lib_y1);
         for (size_t i = 0; i < ctx->lib_count; i++) {
-            int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
-            if (y + row_h < lib_y0 || y > lib_y1) continue;
+            int y = lib_y0 + (int)i * LIB_ROW_H - (int)ctx->lib_scroll;
+            if (y + LIB_ROW_H < lib_y0 || y > lib_y1) continue;
             Rectangle r = {
                 (float)ctx->panel_x + ctx->panel_content_button_offset,
                 (float)y,
                 (float)ctx->panel_button_width,
-                (float)(row_h - 4),
+                (float)(LIB_ROW_H - 4),
             };
             if (!CheckCollisionPointRec(mouse, r)) continue;
             if (right_clicked) {
+                /* close before pruning so nothing points at deleted cache files */
+                if (ctx->lib_entries[i].id == ctx->lib_id) {
+                    if (ctx->book_loaded) { book_free(&ctx->book); ctx->book_loaded = 0; }
+                    close_manga(ctx);
+                    ctx->book_load_attempted = 0;
+                }
                 db_library_delete(&ctx->db, ctx->lib_entries[i].id);
                 refresh_library(ctx);
                 prune_cache(ctx);
@@ -652,10 +664,8 @@ static void HandleInput(AppContext *ctx) {
 
     if (ctx->panel_x > -ctx->panel_width + 5 && ctx->lib_count > 0) {
         float wheel = GetMouseWheelMove();
-        if (wheel != 0 && mouse.x < ctx->panel_x + ctx->panel_width) {
-            ctx->lib_scroll -= wheel * 28;
-            if (ctx->lib_scroll < 0) ctx->lib_scroll = 0;
-        }
+        if (wheel != 0 && mouse.x < ctx->panel_x + ctx->panel_width)
+            ctx->lib_scroll -= wheel * LIB_ROW_H;
     }
 }
 
@@ -683,6 +693,15 @@ static void UpdateState(AppContext *ctx) {
     ctx->panel_toggle_color      = ctx->panel_visible ? RAYWHITE : BLACK;
     ctx->panel_toggle_text_color = ctx->panel_visible ? BLACK : RAYWHITE;
 
+    {
+        int y0, y1;
+        lib_view_bounds(ctx, &y0, &y1);
+        float max_scroll = (float)ctx->lib_count * LIB_ROW_H - (float)(y1 - y0);
+        if (max_scroll < 0) max_scroll = 0;
+        if (ctx->lib_scroll > max_scroll) ctx->lib_scroll = max_scroll;
+        if (ctx->lib_scroll < 0) ctx->lib_scroll = 0;
+    }
+
     float panel_offset = (ctx->panel_x > -ctx->panel_width) ? (ctx->panel_width + ctx->panel_x) : 0;
     ctx->text_display_area = (Rectangle){
         ctx->text_margin_horizontal + panel_offset,
@@ -706,13 +725,17 @@ static void UpdateState(AppContext *ctx) {
         snprintf(ctx->page_info, sizeof ctx->page_info, "Page %zu / %zu", ctx->image_cur + 1, ctx->image_count);
     } else if (ctx->book_loaded) {
         size_t idx = book_index(&ctx->book);
-        if (!ctx->cache_valid || ctx->cached_index != idx) {
+        int stale = !ctx->cache_valid || ctx->cached_index != idx
+                 || ctx->cached_width != ctx->text_display_area.width;
+        /* don't re-wrap every frame of the panel slide */
+        if (stale && (!ctx->is_animating || !ctx->wrapped)) {
             free_lines(ctx->wrapped, ctx->wrapped_count);
             ctx->wrapped = wrap_text(ctx->font, book_page(&ctx->book),
                                      (float)ctx->font_size,
-                                     ctx->screen_width - 2 * ctx->text_margin_horizontal,
+                                     ctx->text_display_area.width,
                                      &ctx->wrapped_count);
             ctx->cached_index = idx;
+            ctx->cached_width = ctx->text_display_area.width;
             ctx->cache_valid = 1;
         }
 
@@ -851,18 +874,17 @@ static void DrawUI(const AppContext *ctx) {
         DrawRectangle(x, ey, ctx->panel_button_width, ctx->panel_button_height, RED);
         DrawText("EXIT", x + (ctx->panel_button_width - MeasureText("EXIT", 20)) / 2, ey + 10, 20, WHITE);
 
-        int lib_y0 = ctx->open_button_y_offset + 2 * ctx->panel_button_height + 25;
-        int lib_y1 = ey - 10;
+        int lib_y0, lib_y1;
+        lib_view_bounds(ctx, &lib_y0, &lib_y1);
         DrawText("Library", x, lib_y0 - 18, 14, LIGHTGRAY);
         BeginScissorMode(x, lib_y0, ctx->panel_button_width, lib_y1 - lib_y0);
-        int row_h = 28;
         for (size_t i = 0; i < ctx->lib_count; i++) {
-            int y = lib_y0 + (int)i * row_h - (int)ctx->lib_scroll;
-            if (y + row_h < lib_y0 || y > lib_y1) continue;
+            int y = lib_y0 + (int)i * LIB_ROW_H - (int)ctx->lib_scroll;
+            if (y + LIB_ROW_H < lib_y0 || y > lib_y1) continue;
             Color bg = (strcmp(ctx->lib_entries[i].kind, "book") == 0)
                 ? (Color){40, 40, 60, 255}
                 : (Color){40, 60, 40, 255};
-            DrawRectangle(x, y, ctx->panel_button_width, row_h - 4, bg);
+            DrawRectangle(x, y, ctx->panel_button_width, LIB_ROW_H - 4, bg);
             DrawTextEx(ctx->font, ctx->lib_entries[i].title,
                        (Vector2){x + 6, y + 4}, 14, 1, WHITE);
         }
