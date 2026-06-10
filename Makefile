@@ -95,6 +95,18 @@ $(CBT_TEST_OUT): tests/cbt_test.c book_src/cbt.c book_src/archive_util.c
 	@mkdir -p build tests/res
 	$(CC) $(CFLAGS) -o $(CBT_TEST_OUT) tests/cbt_test.c book_src/cbt.c book_src/archive_util.c $(BOOK_INCLUDE) $(LDFLAGS)
 
+# build book_test
+BOOK_TEST_OUT = build/book_test
+$(BOOK_TEST_OUT): tests/book_test.c book_src/book_manager.c
+	@mkdir -p build tests/res
+	$(CC) $(CFLAGS) -o $(BOOK_TEST_OUT) tests/book_test.c book_src/book_manager.c $(BOOK_INCLUDE) $(LDFLAGS)
+
+# build archive_util_test
+AU_TEST_OUT = build/archive_util_test
+$(AU_TEST_OUT): tests/archive_util_test.c book_src/archive_util.c
+	@mkdir -p build tests/res
+	$(CC) $(CFLAGS) -o $(AU_TEST_OUT) tests/archive_util_test.c book_src/archive_util.c $(BOOK_INCLUDE) $(LDFLAGS)
+
 
 # clang db_src/tests/manga_db_test.c db_src/manga_d
 # b.c lib/sqlite-amalgamation-3480000/build/libsqlite3.a -Idb_src/ -Ilib/sqlite-
@@ -152,13 +164,17 @@ clean:
 
 # test
 .PHONY: test
-test: $(TEST_OUT) $(CBZ_TEST_OUT) $(CBT_TEST_OUT)
+test: $(TEST_OUT) $(CBZ_TEST_OUT) $(CBT_TEST_OUT) $(BOOK_TEST_OUT) $(AU_TEST_OUT)
 	@echo "Running db_test..."
 	./$(TEST_OUT)
 	@echo "Running cbz_test..."
 	./$(CBZ_TEST_OUT)
 	@echo "Running cbt_test..."
 	./$(CBT_TEST_OUT)
+	@echo "Running book_test..."
+	./$(BOOK_TEST_OUT)
+	@echo "Running archive_util_test..."
+	./$(AU_TEST_OUT)
 
 # sample PD comics (clach04/sample_reading_media, MIT, gitignored)
 SAMPLES_DIR = build/samples

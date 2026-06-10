@@ -22,7 +22,7 @@ make          # builds vendored deps, downloads the UI font, builds guandao
 ```
 
 ```sh
-make test     # db + cbz + cbt tests
+make test     # db, book, cbz, cbt, archive_util tests
 make samples  # download public-domain sample comics into build/samples
 ```
 

@@ -99,11 +99,66 @@ static void test_translations(void) {
     db_close(&db);
 }
 
+static void test_delete_cascade(void) {
+    printf("test_delete_cascade\n");
+    reset();
+    Db db; db_open(&db, TEST_DB);
+
+    int64_t lib_id, page_id, blob_id;
+    db_library_upsert(&db, "/tmp/d.cbz", "manga", "D", &lib_id);
+    db_page_upsert(&db, lib_id, 0, "/tmp/d/00.png", &page_id);
+    db_blob_add(&db, page_id, 0, NULL, "text", &blob_id);
+
+    CHECK(db_library_delete(&db, lib_id) == SQLITE_OK, "delete");
+    CHECK(db_library_get_progress(&db, "/tmp/d.cbz") == -1, "entry gone");
+
+    sqlite3_stmt *s;
+    int pages = 0;
+    sqlite3_prepare_v2(db.handle, "SELECT COUNT(*) FROM pages;", -1, &s, NULL);
+    if (sqlite3_step(s) == SQLITE_ROW) pages = sqlite3_column_int(s, 0);
+    sqlite3_finalize(s);
+    CHECK(pages == 0, "pages cascade");
+
+    int blobs = 0;
+    sqlite3_prepare_v2(db.handle, "SELECT COUNT(*) FROM text_blobs;", -1, &s, NULL);
+    if (sqlite3_step(s) == SQLITE_ROW) blobs = sqlite3_column_int(s, 0);
+    sqlite3_finalize(s);
+    CHECK(blobs == 0, "blobs cascade");
+
+    db_close(&db);
+}
+
+static void test_list_order(void) {
+    printf("test_list_order\n");
+    reset();
+    Db db; db_open(&db, TEST_DB);
+
+    int64_t a, b;
+    db_library_upsert(&db, "/tmp/old.txt", "book", "Old", &a);
+    db_library_upsert(&db, "/tmp/new.txt", "book", "New", &b);
+    /* last_opened_at has second resolution, force distinct values */
+    char sql[128];
+    snprintf(sql, sizeof sql, "UPDATE library SET last_opened_at = 100 WHERE id = %lld;", (long long)a);
+    sqlite3_exec(db.handle, sql, NULL, NULL, NULL);
+    snprintf(sql, sizeof sql, "UPDATE library SET last_opened_at = 200 WHERE id = %lld;", (long long)b);
+    sqlite3_exec(db.handle, sql, NULL, NULL, NULL);
+
+    sqlite3_stmt *s;
+    CHECK(db_library_list(&db, &s) == SQLITE_OK, "list");
+    CHECK(sqlite3_step(s) == SQLITE_ROW && sqlite3_column_int64(s, 0) == b, "most recent first");
+    CHECK(sqlite3_step(s) == SQLITE_ROW && sqlite3_column_int64(s, 0) == a, "older second");
+    sqlite3_finalize(s);
+
+    db_close(&db);
+}
+
 int main(void) {
     test_open();
     test_library();
     test_pages_blobs();
     test_translations();
+    test_delete_cascade();
+    test_list_order();
     printf("\n%s (%d failures)\n", fails ? "FAILED" : "OK", fails);
     return fails ? 1 : 0;
 }
